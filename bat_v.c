@@ -55,13 +55,55 @@ struct sk_buff;
 
 static void batadv_v_iface_activate(struct batadv_hard_iface *hard_iface)
 {
+	/**
+	*	netdev_priv - access network device private data
+	*	@dev: network device
+	*
+	* Get network device private data
+	*/
 	struct batadv_priv *bat_priv = netdev_priv(hard_iface->soft_iface);
+	/**
+	* struct batadv_hard_iface - network device known to batman-adv
+	* @list: list node for batadv_hardif_list
+	* @if_num: identificator of the interface
+	* @if_status: status of the interface for batman-adv
+	* @num_bcasts: number of payload re-broadcasts on this interface (ARQ)
+	* @wifi_flags: flags whether this is (directly or indirectly) a wifi interface
+	* @net_dev: pointer to the net_device
+	* @hardif_obj: kobject of the per interface sysfs "mesh" directory
+	* @refcount: number of contexts the object is used
+	* @batman_adv_ptype: packet type describing packets that should be processed by
+	*  batman-adv for this interface
+	* @soft_iface: the batman-adv interface which uses this network interface
+	* @rcu: struct used for freeing in an RCU-safe manner
+	* @bat_iv: per hard-interface B.A.T.M.A.N. IV data
+	* @bat_v: per hard-interface B.A.T.M.A.N. V data
+	* @debug_dir: dentry for nc subdir in batman-adv directory in debugfs
+	* @neigh_list: list of unique single hop neighbors via this interface
+	* @neigh_list_lock: lock protecting neigh_list
+	*/
 	struct batadv_hard_iface *primary_if;
 pr_info("Entro a batadv_v_iface_activate: interfaz numero %i\n", hard_iface->if_num);
+
+
+    // This is one of the hard-interfaces assigned to this mesh interface
+    //  becomes the primary interface
 	primary_if = batadv_primary_if_get_selected(bat_priv);
 
+
 	if (primary_if) {
+		/**
+		* batadv_v_elp_iface_activate - update the ELP buffer belonging to the given
+		*  hard-interface
+		* @primary_iface: the new primary interface
+		* @hard_iface: interface holding the to-be-updated buffer
+		*/
 		batadv_v_elp_iface_activate(primary_if, hard_iface);
+		/**
+		* batadv_hardif_put - decrement the hard interface refcounter and possibly
+		*  release it
+		* @hard_iface: the hard interface to free
+		*/
 		batadv_hardif_put(primary_if);
 	}
 
@@ -69,7 +111,18 @@ pr_info("Entro a batadv_v_iface_activate: interfaz numero %i\n", hard_iface->if_
 	 * set the interface as ACTIVE right away, without any risk of race
 	 * condition
 	 */
+	 /* This is the possible states of network device known to batman-adv
+	 	enum batadv_hard_if_state {
+			BATADV_IF_NOT_IN_USE,
+			BATADV_IF_TO_BE_REMOVED,
+			BATADV_IF_INACTIVE,
+			BATADV_IF_ACTIVE,
+			BATADV_IF_TO_BE_ACTIVATED,
+			BATADV_IF_I_WANT_YOU,
+		};
+	 */ 
 	if (hard_iface->if_status == BATADV_IF_TO_BE_ACTIVATED)
+		//Then the state is updated.
 		hard_iface->if_status = BATADV_IF_ACTIVE;
 }
 
