@@ -992,9 +992,10 @@ static bool batadv_v_neigh_is_sob(struct batadv_neigh_node *neigh1,
 	threshold = ifinfo1->bat_v.throughput - threshold;
 
 	ret = ifinfo2->bat_v.throughput > threshold;
-
+	//decrement the refcounter and possibly release the neigh_ifinfo of neigh node 2
 	batadv_neigh_ifinfo_put(ifinfo2);
 err_ifinfo2:
+	//decrement the refcounter and possibly release the neigh_ifinfo of neigh node 1
 	batadv_neigh_ifinfo_put(ifinfo1);
 err_ifinfo1:
 	return ret;
@@ -1015,6 +1016,16 @@ static ssize_t batadv_v_store_sel_class(struct batadv_priv *bat_priv,
 {
 	u32 old_class, class;
 
+	/**
+	* batadv_parse_throughput - parse supplied string buffer to extract throughput
+	*  information
+	* @net_dev: the soft interface net device
+	* @buff: string buffer to parse
+	* @description: text shown when throughput string cannot be parsed
+	* @throughput: pointer holding the returned throughput information
+	*
+	* Return: false on parse error and true otherwise.
+	*/
 	if (!batadv_parse_throughput(bat_priv->soft_iface, buff,
 				     "B.A.T.M.A.N. V GW selection class",
 				     &class))
@@ -1024,6 +1035,17 @@ static ssize_t batadv_v_store_sel_class(struct batadv_priv *bat_priv,
 	atomic_set(&bat_priv->gw.sel_class, class);
 
 	if (old_class != class)
+		/**
+		* batadv_gw_reselect - force a gateway reselection
+		* @bat_priv: the bat priv with all the soft interface information
+		*
+		* Set a flag to remind the GW component to perform a new gateway reselection.
+		* However this function does not ensure that the current gateway is going to be
+		* deselected. The reselection mechanism may elect the same gateway once again.
+		*
+		* This means that invoking batadv_gw_reselect() does not guarantee a gateway
+		* change and therefore a uevent is not necessarily expected.
+		*/
 		batadv_gw_reselect(bat_priv);
 
 	return count;
@@ -1053,10 +1075,12 @@ static int batadv_v_gw_throughput_get(struct batadv_gw_node *gw_node, u32 *bw)
 	int ret = -1;
 
 	orig_node = gw_node->orig_node;
+	//router to the originator depending on iface
 	router = batadv_orig_router_get(orig_node, BATADV_IF_DEFAULT);
 	if (!router)
 		goto out;
 
+	//find the ifinfo from an neigh_node
 	router_ifinfo = batadv_neigh_ifinfo_get(router, BATADV_IF_DEFAULT);
 	if (!router_ifinfo)
 		goto out;
@@ -1067,13 +1091,16 @@ static int batadv_v_gw_throughput_get(struct batadv_gw_node *gw_node, u32 *bw)
 	 * client can expect via this particular GW node
 	 */
 	*bw = router_ifinfo->bat_v.throughput;
+	//return minimum of two values, using the specified type.
 	*bw = min_t(u32, *bw, gw_node->bandwidth_down);
 
 	ret = 0;
 out:
 	if (router)
+		//decrement the neighbors refcounter and possibly release it
 		batadv_neigh_node_put(router);
 	if (router_ifinfo)
+		//decrement the refcounter and possibly release the neigh_ifinfo of neigh node
 		batadv_neigh_ifinfo_put(router_ifinfo);
 
 	return ret;
@@ -1091,11 +1118,28 @@ batadv_v_gw_get_best_gw_node(struct batadv_priv *bat_priv)
 	struct batadv_gw_node *gw_node, *curr_gw = NULL;
 	u32 max_bw = 0, bw;
 
+	//obtain the lock
 	rcu_read_lock();
 	hlist_for_each_entry_rcu(gw_node, &bat_priv->gw.gateway_list, list) {
+		/**
+		* kref_get_unless_zero - Increment refcount for object unless it is zero.
+		* @kref: object.
+		*
+		* Return non-zero if the increment succeeded. Otherwise return 0.
+		*
+		* This function is intended to simplify locking around refcounting for
+		* objects that can be looked up from a lookup structure, and which are
+		* removed from that lookup structure in the object destructor.
+		* Operations on such objects require at least a read lock around
+		* lookup + kref_get, and a write lock around kref_put + remove from lookup
+		* structure. Furthermore, RCU implementations become extremely tricky.
+		* With a lookup followed by a kref_get_unless_zero *with return value check*
+		* locking in the kref_put path can be deferred to the actual removal from
+		* the lookup structure and RCU lookups become trivial.
+		*/
 		if (!kref_get_unless_zero(&gw_node->refcount))
 			continue;
-
+		 //retrieve the GW-bandwidth for a given GW
 		if (batadv_v_gw_throughput_get(gw_node, &bw) < 0)
 			goto next;
 
@@ -1103,16 +1147,26 @@ batadv_v_gw_get_best_gw_node(struct batadv_priv *bat_priv)
 			goto next;
 
 		if (curr_gw)
+		/**
+		* batadv_gw_node_put - decrement the gw_node refcounter and possibly release it
+		* @gw_node: gateway node to free
+		*/
 			batadv_gw_node_put(curr_gw);
 
 		curr_gw = gw_node;
+		/**
+		* kref_get - increment refcount for object.
+		* @kref: object.
+		*/
 		kref_get(&curr_gw->refcount);
 		max_bw = bw;
 
 next:
+		//decrement the gw_node refcounter and possibly release it
 		batadv_gw_node_put(gw_node);
 	}
 	rcu_read_unlock();
+	//release the lock
 
 	return curr_gw;
 }
@@ -1135,12 +1189,20 @@ static bool batadv_v_gw_is_eligible(struct batadv_priv *bat_priv,
 
 	threshold = atomic_read(&bat_priv->gw.sel_class);
 
+	/**
+	* batadv_gw_node_get - retrieve gateway node from list of available gateways
+	* @bat_priv: the bat priv with all the soft interface information
+	* @orig_node: originator announcing gateway capabilities
+	*
+	* Return: gateway node if found or NULL otherwise.
+	*/
 	curr_gw = batadv_gw_node_get(bat_priv, curr_gw_orig);
 	if (!curr_gw) {
 		ret = true;
 		goto out;
 	}
 
+	//retrieve the GW-bandwidth for a given GW
 	if (batadv_v_gw_throughput_get(curr_gw, &gw_throughput) < 0) {
 		ret = true;
 		goto out;
@@ -1150,6 +1212,7 @@ static bool batadv_v_gw_is_eligible(struct batadv_priv *bat_priv,
 	if (!orig_node)
 		goto out;
 
+	//retrieve gateway node from list of available gateways
 	if (batadv_v_gw_throughput_get(orig_gw, &orig_throughput) < 0)
 		goto out;
 
@@ -1166,8 +1229,10 @@ static bool batadv_v_gw_is_eligible(struct batadv_priv *bat_priv,
 	ret = true;
 out:
 	if (curr_gw)
+		//decrement the gw_node refcounter and possibly release it
 		batadv_gw_node_put(curr_gw);
 	if (orig_gw)
+		//decrement the gw_node refcounter and possibly release it
 		batadv_gw_node_put(orig_gw);
 
 	return ret;
@@ -1184,14 +1249,17 @@ static int batadv_v_gw_write_buffer_text(struct batadv_priv *bat_priv,
 	struct batadv_neigh_ifinfo *router_ifinfo = NULL;
 	int ret = -1;
 
+	//router to the originator depending on iface
 	router = batadv_orig_router_get(gw_node->orig_node, BATADV_IF_DEFAULT);
 	if (!router)
 		goto out;
 
+	//find the ifinfo from an neigh_node
 	router_ifinfo = batadv_neigh_ifinfo_get(router, BATADV_IF_DEFAULT);
 	if (!router_ifinfo)
 		goto out;
-
+		
+	//SEGUIR POR ACA..,.
 	curr_gw = batadv_gw_get_selected_gw_node(bat_priv);
 
 	seq_printf(seq, "%s %pM (%9u.%1u) %pM [%10s]: %u.%u/%u.%u MBit\n",
