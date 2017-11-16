@@ -1258,8 +1258,8 @@ static int batadv_v_gw_write_buffer_text(struct batadv_priv *bat_priv,
 	router_ifinfo = batadv_neigh_ifinfo_get(router, BATADV_IF_DEFAULT);
 	if (!router_ifinfo)
 		goto out;
-		
-	//SEGUIR POR ACA..,.
+
+	
 	curr_gw = batadv_gw_get_selected_gw_node(bat_priv);
 
 	seq_printf(seq, "%s %pM (%9u.%1u) %pM [%10s]: %u.%u/%u.%u MBit\n",
@@ -1272,14 +1272,27 @@ static int batadv_v_gw_write_buffer_text(struct batadv_priv *bat_priv,
 		   gw_node->bandwidth_down % 10,
 		   gw_node->bandwidth_up / 10,
 		   gw_node->bandwidth_up % 10);
+	/**
+	* seq_has_overflowed - check if the buffer has overflowed
+	* @m: the seq_file handle
+	*
+	* seq_files have a buffer which may overflow. When this happens a larger
+	* buffer is reallocated and all the data will be printed again.
+	* The overflow state is true when m->count == m->size.
+	*
+	* Returns true if the buffer received more than it can hold.
+	*/
 	ret = seq_has_overflowed(seq) ? -1 : 0;
 
 	if (curr_gw)
+		//decrement the gw_node refcounter and possibly release it
 		batadv_gw_node_put(curr_gw);
 out:
 	if (router_ifinfo)
+		//decrement the refcounter and possibly release the neigh_ifinfo of neigh node
 		batadv_neigh_ifinfo_put(router_ifinfo);
 	if (router)
+		//decrement the neighbors refcounter and possibly release it
 		batadv_neigh_node_put(router);
 	return ret;
 }
@@ -1298,6 +1311,7 @@ static void batadv_v_gw_print(struct batadv_priv *bat_priv,
 	seq_puts(seq,
 		 "      Gateway        ( throughput)           Nexthop [outgoingIF]: advertised uplink bandwidth\n");
 
+	//obtain the lock
 	rcu_read_lock();
 	hlist_for_each_entry_rcu(gw_node, &bat_priv->gw.gateway_list, list) {
 		/* fails if orig_node has no router */
@@ -1306,6 +1320,7 @@ static void batadv_v_gw_print(struct batadv_priv *bat_priv,
 
 		gw_count++;
 	}
+	//obtain the lock
 	rcu_read_unlock();
 
 	if (gw_count == 0)
@@ -1333,73 +1348,97 @@ static int batadv_v_gw_dump_entry(struct sk_buff *msg, u32 portid, u32 seq,
 	int ret = -EINVAL;
 	void *hdr;
 
+	//router to the originator depending on iface
 	router = batadv_orig_router_get(gw_node->orig_node, BATADV_IF_DEFAULT);
 	if (!router)
 		goto out;
-
+	//find the ifinfo from an neigh_node
 	router_ifinfo = batadv_neigh_ifinfo_get(router, BATADV_IF_DEFAULT);
 	if (!router_ifinfo)
 		goto out;
 
 	curr_gw = batadv_gw_get_selected_gw_node(bat_priv);
 
+	//Add generic netlink header to netlink message
 	hdr = genlmsg_put(msg, portid, seq, &batadv_netlink_family,
 			  NLM_F_MULTI, BATADV_CMD_GET_GATEWAYS);
 	if (!hdr) {
+		//return this error message: /* No buffer space available */
 		ret = -ENOBUFS;
 		goto out;
 	}
-
+	// return this this error: /* Message too long */
 	ret = -EMSGSIZE;
 
 	if (curr_gw == gw_node) {
+		//Add a flag netlink attribute to a socket buffer
 		if (nla_put_flag(msg, BATADV_ATTR_FLAG_BEST)) {
+			//Cancel construction of a generic netlink message
 			genlmsg_cancel(msg, hdr);
 			goto out;
 		}
 	}
-
+	//Add a netlink attribute to a socket buffer
 	if (nla_put(msg, BATADV_ATTR_ORIG_ADDRESS, ETH_ALEN,
 		    gw_node->orig_node->orig)) {
+		//Cancel construction of a generic netlink message
 		genlmsg_cancel(msg, hdr);
 		goto out;
 	}
 
+	//Add a u32 netlink attribute to a socket buffer
 	if (nla_put_u32(msg, BATADV_ATTR_THROUGHPUT,
 			router_ifinfo->bat_v.throughput)) {
+		//Cancel construction of a generic netlink message
 		genlmsg_cancel(msg, hdr);
 		goto out;
 	}
 
+	//Add a netlink attribute to a socket buffer
 	if (nla_put(msg, BATADV_ATTR_ROUTER, ETH_ALEN, router->addr)) {
+		//Cancel construction of a generic netlink message
 		genlmsg_cancel(msg, hdr);
 		goto out;
 	}
 
+	/**
+	* nla_put_string - Add a string netlink attribute to a socket buffer
+	* @skb: socket buffer to add attribute to
+	* @attrtype: attribute type
+	* @str: NUL terminated string
+	*/
 	if (nla_put_string(msg, BATADV_ATTR_HARD_IFNAME,
 			   router->if_incoming->net_dev->name)) {
+		//Cancel construction of a generic netlink message
 		genlmsg_cancel(msg, hdr);
 		goto out;
 	}
 
+	//Add a u32 netlink attribute to a socket buffer
 	if (nla_put_u32(msg, BATADV_ATTR_BANDWIDTH_DOWN,
 			gw_node->bandwidth_down)) {
+		//Cancel construction of a generic netlink message
 		genlmsg_cancel(msg, hdr);
 		goto out;
 	}
 
+	//Add a u32 netlink attribute to a socket buffer
 	if (nla_put_u32(msg, BATADV_ATTR_BANDWIDTH_UP, gw_node->bandwidth_up)) {
+		//Cancel construction of a generic netlink message
 		genlmsg_cancel(msg, hdr);
 		goto out;
 	}
 
+	//Finalize a generic netlink message
 	genlmsg_end(msg, hdr);
 	ret = 0;
 
 out:
 	if (router_ifinfo)
+		//decrement the refcounter and possibly release the neigh_ifinfo of neigh node
 		batadv_neigh_ifinfo_put(router_ifinfo);
 	if (router)
+		//decrement the neighbors refcounter and possibly release it
 		batadv_neigh_node_put(router);
 	return ret;
 }
@@ -1413,16 +1452,18 @@ out:
 static void batadv_v_gw_dump(struct sk_buff *msg, struct netlink_callback *cb,
 			     struct batadv_priv *bat_priv)
 {
+	//Macro: #define NETLINK_CB(skb)		(*(struct netlink_skb_parms*)&((skb)->cb))
 	int portid = NETLINK_CB(cb->skb).portid;
 	struct batadv_gw_node *gw_node;
 	int idx_skip = cb->args[0];
 	int idx = 0;
 
+	//obtain the lock
 	rcu_read_lock();
 	hlist_for_each_entry_rcu(gw_node, &bat_priv->gw.gateway_list, list) {
 		if (idx++ < idx_skip)
 			continue;
-
+		//Dump a gateway into a message
 		if (batadv_v_gw_dump_entry(msg, portid, cb->nlh->nlmsg_seq,
 					   bat_priv, gw_node)) {
 			idx_skip = idx - 1;
@@ -1432,6 +1473,7 @@ static void batadv_v_gw_dump(struct sk_buff *msg, struct netlink_callback *cb,
 
 	idx_skip = idx;
 unlock:
+	//release the lock
 	rcu_read_unlock();
 
 	cb->args[0] = idx_skip;
