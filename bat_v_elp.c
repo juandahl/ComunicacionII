@@ -56,10 +56,26 @@
 static void batadv_v_elp_start_timer(struct batadv_hard_iface *hard_iface)
 {
 	unsigned int msecs;
-
+    //#define BATADV_JITTER 20
+	//#define atomic_read(v)		READ_ONCE((v)->counter)
 	msecs = atomic_read(&hard_iface->bat_v.elp_interval) - BATADV_JITTER;
+	/**
+	*	prandom_u32 - pseudo random number generator
+	*
+	*	A 32 bit pseudo-random number is generated using a fast
+	*	algorithm suitable for simulation. This algorithm is NOT
+	*	considered safe for cryptographic use.
+	*/
 	msecs += prandom_u32() % (2 * BATADV_JITTER);
 
+	/**
+	* queue_delayed_work - queue work on a workqueue after delay
+	* @wq: workqueue to use
+	* @dwork: delayable work to queue
+	* @delay: number of jiffies to wait before queueing
+	*
+	* Equivalent to queue_delayed_work_on() but tries to use the local CPU.
+	*/
 	queue_delayed_work(batadv_event_workqueue, &hard_iface->bat_v.elp_wq,
 			   msecs_to_jiffies(msecs));
 }
@@ -91,6 +107,7 @@ static u32 batadv_v_elp_get_throughput(struct batadv_hardif_neigh_node *neigh)
 	 * cfg80211 API
 	 */
 	if (batadv_is_wifi_hardif(hard_iface)) {
+
 		if (!batadv_is_cfg80211_hardif(hard_iface))
 			/* unsupported WiFi driver version */
 			goto default_throughput;
@@ -99,9 +116,26 @@ static u32 batadv_v_elp_get_throughput(struct batadv_hardif_neigh_node *neigh)
 		if (!real_netdev)
 			goto default_throughput;
 
+		/**
+		* cfg80211_get_station - retrieve information about a given station
+		* @dev: the device where the station is supposed to be connected to
+		* @mac_addr: the mac address of the station of interest
+		* @sinfo: pointer to the structure to fill with the information
+		*
+		* Returns 0 on success and sinfo is filled with the available information
+		* otherwise returns a negative error code and the content of sinfo has to be
+		* considered undefined.
+		*/
 		ret = cfg80211_get_station(real_netdev, neigh->addr, &sinfo);
 
+		/**
+		*	dev_put - release reference to device
+		*	@dev: network device
+		*
+		* Release reference to device to allow it to be freed.
+		*/
 		dev_put(real_netdev);
+		// ret is equal of error message : "/* No such file or directory */"
 		if (ret == -ENOENT) {
 			/* Node is not associated anymore! It would be
 			 * possible to delete this neighbor. For now set
