@@ -226,7 +226,24 @@ batadv_v_elp_wifi_neigh_probe(struct batadv_hardif_neigh_node *neigh)
 		batadv_dbg(BATADV_DBG_BATMAN, bat_priv,
 			   "Sending unicast (probe) ELP packet on interface %s to %pM\n",
 			   hard_iface->net_dev->name, neigh->addr);
-
+		/**
+		* batadv_send_skb_packet - send an already prepared packet
+		* @skb: the packet to send
+		* @hard_iface: the interface to use to send the broadcast packet
+		* @dst_addr: the payload destination
+		*
+		* Send out an already prepared packet to the given neighbor or broadcast it
+		* using the specified interface. Either hard_iface or neigh_node must be not
+		* NULL.
+		* If neigh_node is NULL, then the packet is broadcasted using hard_iface,
+		* otherwise it is sent as unicast to the given neighbor.
+		*
+		* Regardless of the return value, the skb is consumed.
+		*
+		* Return: A negative errno code is returned on a failure. A success does not
+		* guarantee the frame will be transmitted as it may be dropped due
+		* to congestion or traffic shaping.
+		*/
 		batadv_send_skb_packet(skb, hard_iface, neigh->addr);
 	}
 
@@ -251,6 +268,7 @@ static void batadv_v_elp_periodic_work(struct work_struct *work)
 
 	bat_v = container_of(work, struct batadv_hard_iface_bat_v, elp_wq.work);
 	hard_iface = container_of(bat_v, struct batadv_hard_iface, bat_v);
+	//access network device private data
 	bat_priv = netdev_priv(hard_iface->soft_iface);
 
 	if (atomic_read(&bat_priv->mesh_state) == BATADV_MESH_DEACTIVATING)
@@ -265,6 +283,22 @@ static void batadv_v_elp_periodic_work(struct work_struct *work)
 	if (hard_iface->if_status != BATADV_IF_ACTIVE)
 		goto restart_timer;
 
+	/**
+ *	skb_copy	-	create private copy of an sk_buff
+ *	@skb: buffer to copy
+ *	@gfp_mask: allocation priority
+ *
+ *	Make a copy of both an &sk_buff and its data. This is used when the
+ *	caller wishes to modify the data and needs a private copy of the
+ *	data to alter. Returns %NULL on failure or the pointer to the buffer
+ *	on success. The returned buffer has a reference count of 1.
+ *
+ *	As by-product this function converts non-linear &sk_buff to linear
+ *	one, so that &sk_buff becomes completely private and caller is allowed
+ *	to modify all the data of returned buffer. This means that this
+ *	function is not recommended for use in circumstances when only
+ *	header is going to be modified. Use pskb_copy() instead.
+ */
 	skb = skb_copy(hard_iface->bat_v.elp_skb, GFP_ATOMIC);
 	if (!skb)
 		goto restart_timer;
@@ -278,7 +312,26 @@ static void batadv_v_elp_periodic_work(struct work_struct *work)
 		   "Sending broadcast ELP packet on interface %s, seqno %u\n",
 		   hard_iface->net_dev->name,
 		   atomic_read(&hard_iface->bat_v.elp_seqno));
-
+	// call to the method: batadv_send_skb_packet,
+	/**
+	* batadv_send_skb_packet - send an already prepared packet
+	* @skb: the packet to send
+	* @hard_iface: the interface to use to send the broadcast packet
+	* @dst_addr: the payload destination. In this case is
+	* an unsigned char batadv_broadcast_addr[] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+	* 
+	* Send out an already prepared packet to the given neighbor or broadcast it
+	* using the specified interface. Either hard_iface or neigh_node must be not
+	* NULL.
+	* If neigh_node is NULL, then the packet is broadcasted using hard_iface,
+	* otherwise it is sent as unicast to the given neighbor.
+	*
+	* Regardless of the return value, the skb is consumed.
+	*
+	* Return: A negative errno code is returned on a failure. A success does not
+	* guarantee the frame will be transmitted as it may be dropped due
+	* to congestion or traffic shaping.
+	*/
 	batadv_send_broadcast_skb(skb, hard_iface);
 
 	atomic_inc(&hard_iface->bat_v.elp_seqno);
@@ -294,7 +347,15 @@ static void batadv_v_elp_periodic_work(struct work_struct *work)
 	 *    value retrieved in this step might be 100ms old because the
 	 *    probing packets at point 1) could still be in the HW queue)
 	 */
+	//obtain the lock
 	rcu_read_lock();
+	//iterate over rcu list of given type
+	/*#define hlist_for_each_entry_rcu(pos, head, member)			\
+	for (pos = hlist_entry_safe (rcu_dereference_raw(hlist_first_rcu(head)),\
+			typeof(*(pos)), member);			\
+		pos;							\
+		pos = hlist_entry_safe(rcu_dereference_raw(hlist_next_rcu(\
+			&(pos)->member)), typeof(*(pos)), member))*/
 	hlist_for_each_entry_rcu(hardif_neigh, &hard_iface->neigh_list, list) {
 		if (!batadv_v_elp_wifi_neigh_probe(hardif_neigh))
 			/* if something goes wrong while probing, better to stop
@@ -312,9 +373,11 @@ static void batadv_v_elp_periodic_work(struct work_struct *work)
 		queue_work(batadv_event_workqueue,
 			   &hardif_neigh->bat_v.metric_work);
 	}
+	//release the lock
 	rcu_read_unlock();
 
 restart_timer:
+	//restart timer for ELP periodic work
 	batadv_v_elp_start_timer(hard_iface);
 out:
 	return;
@@ -332,7 +395,7 @@ int batadv_v_elp_iface_enable(struct batadv_hard_iface *hard_iface)
 	unsigned char *elp_buff;
 	u32 random_seqno;
 	size_t size;
-	int res = -ENOMEM;
+	int res = -ENOMEM; //message: Out of Memory
 
 	size = ETH_HLEN + NET_IP_ALIGN + BATADV_ELP_HLEN;
 	hard_iface->bat_v.elp_skb = dev_alloc_skb(size);
@@ -362,6 +425,7 @@ int batadv_v_elp_iface_enable(struct batadv_hard_iface *hard_iface)
 
 	INIT_DELAYED_WORK(&hard_iface->bat_v.elp_wq,
 			  batadv_v_elp_periodic_work);
+	//restart timer for ELP periodic work
 	batadv_v_elp_start_timer(hard_iface);
 	res = 0;
 
@@ -397,7 +461,16 @@ void batadv_v_elp_iface_activate(struct batadv_hard_iface *primary_iface,
 		return;
 
 	skb = hard_iface->bat_v.elp_skb;
+	//obtain the private data of ELP packet.
 	elp_packet = (struct batadv_elp_packet *)skb->data;
+	/**
+	* ether_addr_copy - Copy an Ethernet address
+	* @dst: Pointer to a six-byte array Ethernet address destination
+	* @src: Pointer to a six-byte array Ethernet address source
+	*
+	* Please note: dst & src must both be aligned to u16.
+	*/
+	//this copies the source address of the ELP interface in the physical interface.
 	ether_addr_copy(elp_packet->orig,
 			primary_iface->net_dev->dev_addr);
 }
@@ -413,10 +486,17 @@ void batadv_v_elp_primary_iface_set(struct batadv_hard_iface *primary_iface)
 
 	/* update orig field of every elp iface belonging to this mesh */
 	rcu_read_lock();
+	//iterate over rcu list of given type
+	/*#define hlist_for_each_entry_rcu(pos, head, member)			\
+	for (pos = hlist_entry_safe (rcu_dereference_raw(hlist_first_rcu(head)),\
+			typeof(*(pos)), member);			\
+		pos;							\
+		pos = hlist_entry_safe(rcu_dereference_raw(hlist_next_rcu(\
+			&(pos)->member)), typeof(*(pos)), member))*/
 	list_for_each_entry_rcu(hard_iface, &batadv_hardif_list, list) {
 		if (primary_iface->soft_iface != hard_iface->soft_iface)
 			continue;
-
+		//update the ELP buffer belonging to the given hard-interface
 		batadv_v_elp_iface_activate(primary_iface, hard_iface);
 	}
 	rcu_read_unlock();
@@ -443,16 +523,43 @@ static void batadv_v_elp_neigh_update(struct batadv_priv *bat_priv,
 	struct batadv_hardif_neigh_node *hardif_neigh;
 	s32 seqno_diff;
 	s32 elp_latest_seqno;
+	
 
+	/**
+	* batadv_v_ogm_orig_get - retrieve and possibly create an originator node
+	* @bat_priv: the bat priv with all the soft interface information
+	* @addr: the address of the originator
+	*
+	* Return: the orig_node corresponding to the specified address. If such object
+	* does not exist it is allocated here. In case of allocation failure returns
+	* NULL.
+	*/
 	orig_neigh = batadv_v_ogm_orig_get(bat_priv, elp_packet->orig);
 	if (!orig_neigh)
 		return;
 
+	/**
+	* batadv_neigh_node_get_or_create - retrieve or create a neigh node object
+	* @orig_node: originator object representing the neighbour
+	* @hard_iface: the interface where the neighbour is connected to
+	* @neigh_addr: the mac address of the neighbour interface
+	*
+	* Return: the neighbour node if found or created or NULL otherwise.
+	*/
 	neigh = batadv_neigh_node_get_or_create(orig_neigh,
 						if_incoming, neigh_addr);
 	if (!neigh)
 		goto orig_free;
-
+	
+	/**
+	* batadv_hardif_neigh_get - retrieve a hardif neighbour from the list
+	* @hard_iface: the interface where this neighbour is connected to
+	* @neigh_addr: the address of the neighbour
+	*
+	* Looks for and possibly returns a neighbour belonging to this hard interface.
+	*
+	* Return: neighbor when found. Othwerwise NULL
+	*/
 	hardif_neigh = batadv_hardif_neigh_get(if_incoming, neigh_addr);
 	if (!hardif_neigh)
 		goto neigh_free;
@@ -473,12 +580,27 @@ static void batadv_v_elp_neigh_update(struct batadv_priv *bat_priv,
 
 hardif_free:
 	if (hardif_neigh)
+		/**
+		* batadv_hardif_neigh_put - decrement the hardif neighbors refcounter
+		*  and possibly release it
+		* @hardif_neigh: hardif neigh neighbor to free
+		*/
 		batadv_hardif_neigh_put(hardif_neigh);
 neigh_free:
 	if (neigh)
+		/**
+		* batadv_neigh_node_put - decrement the neighbors refcounter and possibly
+		*  release it
+		* @neigh_node: neigh neighbor to free
+		*/
 		batadv_neigh_node_put(neigh);
 orig_free:
 	if (orig_neigh)
+		/**
+		* batadv_orig_node_put - decrement the orig node refcounter and possibly
+		*  release it
+		* @orig_node: the orig node to free
+		*/
 		batadv_orig_node_put(orig_neigh);
 }
 
@@ -493,17 +615,35 @@ orig_free:
 int batadv_v_elp_packet_recv(struct sk_buff *skb,
 			     struct batadv_hard_iface *if_incoming)
 {
+	//access to the private data
 	struct batadv_priv *bat_priv = netdev_priv(if_incoming->soft_iface);
 	struct batadv_elp_packet *elp_packet;
 	struct batadv_hard_iface *primary_if;
+
 	struct ethhdr *ethhdr = (struct ethhdr *)skb_mac_header(skb);
 	bool res;
-	int ret = NET_RX_DROP;
+	int ret = NET_RX_DROP; // message "packet dropped"
 
+	/*	
+	* Performs the following controls:
+	*   -drop packet if it has not necessary minimum size 
+	*	-packet with broadcast indication but unicast recipient
+	*	-packet with invalid sender address
+	*	-create a copy of the skb, if needed, to modify it
+	* 	-change  of keep skb linear, if needed.
+	*/
 	res = batadv_check_management_packet(skb, if_incoming, BATADV_ELP_HLEN);
 	if (!res)
 		goto free_skb;
 
+	/**
+	* batadv_is_my_mac - check if the given mac address belongs to any of the real
+	* interfaces in the current mesh
+	* @bat_priv: the bat priv with all the soft interface information
+	* @addr: the address to check
+	*
+	* Return: 'true' if the mac address was found, false otherwise.
+	*/
 	if (batadv_is_my_mac(bat_priv, ethhdr->h_source))
 		goto free_skb;
 
@@ -515,25 +655,47 @@ int batadv_v_elp_packet_recv(struct sk_buff *skb,
 
 	elp_packet = (struct batadv_elp_packet *)skb->data;
 
+	//#define batadv_dbg(type, bat_priv, arg...) \ _batadv_dbg(type, bat_priv, 0, ## arg)
 	batadv_dbg(BATADV_DBG_BATMAN, bat_priv,
 		   "Received ELP packet from %pM seqno %u ORIG: %pM\n",
 		   ethhdr->h_source, ntohl(elp_packet->seqno),
 		   elp_packet->orig);
-
+	// This is one of the hard-interfaces assigned to this mesh interface
+    //  becomes the primary interface
 	primary_if = batadv_primary_if_get_selected(bat_priv);
 	if (!primary_if)
 		goto free_skb;
-
+	//update an ELP neighbour node
 	batadv_v_elp_neigh_update(bat_priv, ethhdr->h_source, if_incoming,
 				  elp_packet);
 
-	ret = NET_RX_SUCCESS;
+	ret = NET_RX_SUCCESS; // message: “keep 'em coming, baby”
+	/**
+	* batadv_hardif_put - decrement the hard interface refcounter and possibly
+	*  release it
+	* @hard_iface: the hard interface to free
+	*/
 	batadv_hardif_put(primary_if);
 
 free_skb:
 	if (ret == NET_RX_SUCCESS)
+		/**
+		*	consume_skb - free an skbuff
+		*	@skb: buffer to free
+		*
+		*	Drop a ref to the buffer and free it if the usage count has hit zero
+		*	Functions identically to kfree_skb, but kfree_skb assumes that the frame
+		*	is being dropped after a failure and notes that
+		*/
 		consume_skb(skb);
 	else
+		/**
+		*	kfree_skb - free an sk_buff
+		*	@skb: buffer to free
+		*
+		*	Drop a reference to the buffer and free it if the usage count has
+		*	hit zero.
+		*/
 		kfree_skb(skb);
 
 	return ret;
