@@ -59,6 +59,43 @@
  * does not exist it is allocated here. In case of allocation failure returns
  * NULL.
  */
+//En cada interfaz batman de un nodo, se almacena informacion de varios tipos.
+//Entre esa informacion se almacenan los demas nodos de la red mesh, llamados originators.
+//Por cada originator tenemos una struct batadv_orig_node que contiene esa informaciom
+//Los punteros a esas structs se almacenan a su vez en una tabla de hashing para accederlas mas rapidamente.
+//Ese acceso se realiza en base a la MAC del nodo originator.
+//
+//Esta funcion (batadv_v_ogm_orig_get) recibe una MAC, y se encarga de buscar un originator con esa mac; en caso 
+//de encontrarlo devuelve un puntero a su struct, y en caso de no encontrarlo trata de agregar un nuevo elemento 
+//(struct batadv_orig_node) a la tabla de hash.
+//Si puede hacerlo, devuelve el puntero, y si no puede, devuelve NULL
+
+//Es invocada en
+//bat_v_elp.c: batadv_v_elp_neigh_update
+//  Esta funcion es invocada cuando se recibe un paquete elp por una interfaz, para actualizar
+//  la info del nodo vecino que lo envio.
+//  Invoca a batadv_v_ogm_orig_get con el nodo que envio el elp (elp_packet->orig, que es la mac
+//  del nodo emisor) para que devuelva un puntero a los datos de ese nodo (struct batadv_orig_node *) 
+//  o lo cree si no existe
+//bat_v_ogm.c: batadv_v_ogm_process
+//  Cuando se recibe un paquete tipo OGM, en el puede haber varios ogms que se van agregando al paquete
+//  a medida que recorre los nodos mesh.
+//  Al recibirlo, se invoca a batadv_v_ogm_process pasandole entre otras cosas el sk buffer y el offset
+//  en el, para poder ubicar el ogm que se esta procesando. 
+//  En esta funcion se hacen validaciones acerca del throughput y del neighbor del cual se recibio el ogm, 
+//  y si esto es correcto, se invoca a batadv_v_ogm_orig_get para obtener el puntero a la struct
+//  batadv_orig_node del nodo que origino este ogm, o bien crearla si no existe.
+//bat_v_ogm.c: batadv_v_ogm_route_update
+//  batadv_v_ogm_route_update actualiza las rutas en base a un ogm recibido.
+//  Invoca a batadv_v_ogm_orig_get para obtener o crear la struct batadv_orig_node correspondiente al nodo
+//  neigbor que envio (no necesariamente origino) el ogm. La mac la recibe como parametro, y es la mac origen 
+//  del frame ethernet que encapsula al ogm
+//
+//Las secuencias de llamado a batadv_v_ogm_orig_get son las siguientes (esto solo va si no son demasiadas)
+//batadv_v_ogm_process----->batadv_v_ogm_orig_get
+//batadv_v_ogm_process----->batadv_v_ogm_process_per_outif----->batadv_v_ogm_route_update----->batadv_v_ogm_orig_get
+//
+//batadv_v_ogm_orig_get se publica en bat_v_ogm.h
 struct batadv_orig_node *batadv_v_ogm_orig_get(struct batadv_priv *bat_priv,
 					       const u8 *addr)
 {
@@ -66,43 +103,31 @@ struct batadv_orig_node *batadv_v_ogm_orig_get(struct batadv_priv *bat_priv,
 	int hash_added;
 
 	//return orig_node if it exists in the has table. Otherwise NULL
+//Busca en la hash table de originators que conoce el nodo, uno que tenga la direccion ethernet pasada 
+//como parametro, en este caso addr, que es la mac del originator, Si el originator ya esta en la tabla, 
+//devuelve un puntero a su struct correspondiente; 
 	orig_node = batadv_orig_hash_find(bat_priv, addr);
 	if (orig_node)
 		return orig_node;
 
-	/**
-	 * batadv_orig_node_new - creates a new orig_node
-	 * @bat_priv: the bat priv with all the soft interface information
-	 * @addr: the mac address of the originator
-	 *
-	 * Creates a new originator object and initialise all the generic fields.
-	 * The new object is not added to the originator list.
-	 *
-	 * Return: the newly created object or NULL on failure.
-	 */
+//Si el originator no fue encontardo, trata de crear una struct para el, 
 	orig_node = batadv_orig_node_new(bat_priv, addr);
 	if (!orig_node)
 		return NULL;
-
+//Si llega aca, pudo crear la struct para el originator....
 	 // kref_get - increment refcount for object.
+//estoy usando la struct, incremento el contador (kref) para que no la borren (esto no es necesario comentarlo porque
+//es una funcion del kernel)
 	kref_get(&orig_node->refcount);
-	/**
-	 *	batadv_hash_add - adds data to the hashtable
-	 *	@hash: storage hash table
-	 *	@compare: callback to determine if 2 hash elements are identical
-	 *	@choose: callback calculating the hash index
-	 *	@data: data passed to the aforementioned callbacks as argument
-	 *	@data_node: to be added element
-	 *
-	 *	Return: 0 on success, 1 if the element already is in the hash
-	 *	and -1 on error.
-	 */
+//aca trata de agregar la entrada en la hash table... retorna null y libera memoria si no puede
+//retorna el puntero a la struct si pudo crear 
 	hash_added = batadv_hash_add(bat_priv->orig_hash, batadv_compare_orig,
 				     batadv_choose_orig, orig_node,
 				     &orig_node->hash_entry);
 	//si hubo error al agregar a la tabla
 	if (hash_added != 0) {
 		/* remove refcnt for newly created orig_node and hash entry */
+//decrementa reference counts (y posiblemente libere memoria), tambien del kernel
 		batadv_orig_node_put(orig_node);
 		batadv_orig_node_put(orig_node);
 		orig_node = NULL;
