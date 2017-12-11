@@ -53,16 +53,51 @@
  * batadv_v_elp_start_timer - restart timer for ELP periodic work
  * @hard_iface: the interface for which the timer has to be reset
  */
+
+// La funcion 'batadv_v_elp_start_timer' tiene la funcion de reiniciar el timer de retransmision de mensajes ELP.
+// Cada nodo periódicamente (intervalo ELP) genera y transmite mensajes ELP para cada interfaz B.A.T.M.A.N. se está ejecutando.
+// Esta recibe una referencia al nodo (interfaz) BATMAN para cual se va resetear el timer.
+
+//Es invocada en:
+//   -bat_v_elp.c:  batadv_v_elp_periodic_work 
+//		 Al realizar la emision de los mensajes ELP en intervalos regulares se debe verificar si antes de emitir la interfaz, 
+//      ademas de estar habilitada,tiene que estar activada. Si esta no posee dicho status, se llama a resetear el timer invocando 
+//   	 a la funcion 'batadv_v_elp_start_timer'. Tambien es invocada en caso de que el buffer del mensaje ELP a enviar (que se presenta 
+//	     con el campo elp_skb en el struct de la interfaz) se encuentre vacio, es decir, no se tenga el mensaje a replicar.
+//   -bat_v_elp: batadv_v_elp_iface_enable 
+//		 Esta funcion se utiliza al iniciar la  configuracion de los datos privados del struct la interfaz ELP (B.A.T.M.A.N),
+//		 antes de iniciar el envio broadcast.
+//
+//Las secuencias de llamado a batadv_v_elp_start_timer son las siguientes
+// -batadv_v_iface_enable-->batadv_v_elp_iface_enable-->batadv_v_elp_start_timer
+// -batadv_v_elp_start_timer-->batadv_v_elp_iface_enable-->batadv_v_elp_periodic_work-->batadv_v_elp_start_timer
+//
+//Funcion estatica interna del archivo
 static void batadv_v_elp_start_timer(struct batadv_hard_iface *hard_iface)
 {
 	unsigned int msecs;
 
-	msecs = atomic_read(&hard_iface->bat_v.elp_interval) - BATADV_JITTER;
+	//Se utilizan dos macros:
+    //#define BATADV_JITTER 20
+	//#define atomic_read(v)		READ_ONCE((v)->counter)
+	//Luego de utilizar estas dos macros, se prosigue a realizar el reset de la interfaz.
+	//La unidad de tiempo que se utiliza es la de microsegundos, 
+	//porque lo que se puede decir que cada cierta unidad de microsegundos el nodo  va a realizar esta transmision broadcast a todos sus vecinos.
+	//Para resetear el timer, primero se realiza la resta entre el valor del intervalo de tiempo entre dos transmisiones ELP 
+	//que forma parte del struct que representa a la interfaz como el atributo 'elp_interval' y  le resta BATADV_JITTER que es 20 unidades de msegs por defecto.
+	//Este valor se encuentra en la macro en el Main de batman-adv como un parametro BATMAN.
+	msecs = atomic_read(&hard_iface->bat_v.elp_interval) - BATADV_JITTER; 
+
+	// 'prandom_u32' funcion del kernel
+	//Al valor obtenido anteriormente se le adiciona el valor de un numero random modulo 40.
 	msecs += prandom_u32() % (2 * BATADV_JITTER);
 
+	//Se agrega la cola de trabajo correspondiente (utilizada para programar transmisiones ELP) a ejecutar con el delay calculado. 'queue_delayed_work' funcion del kernel.
+	//Se utiliza una unidad 'jiffies' por que es el numero de tics que posee el timer del CPU. (Por cada interrupcion del timer, este se incrementa). Tambien llamado 'clock' o 'pulso'. 
 	queue_delayed_work(batadv_event_workqueue, &hard_iface->bat_v.elp_wq,
 			   msecs_to_jiffies(msecs));
 }
+
 
 /**
  * batadv_v_elp_get_throughput - get the throughput towards a neighbour
@@ -71,6 +106,8 @@ static void batadv_v_elp_start_timer(struct batadv_hard_iface *hard_iface)
  * Return: The throughput towards the given neighbour in multiples of 100kpbs
  *         (a value of '1' equals to 0.1Mbps, '10' equals 1Mbps, etc).
  */
+
+ //La funcion 'batadv_v_elp_get_throughput' recibe la interfaz vecina para la cual se debe obtener el rendimiento. El calculo del mismo consiste
 static u32 batadv_v_elp_get_throughput(struct batadv_hardif_neigh_node *neigh)
 {
 	struct batadv_hard_iface *hard_iface = neigh->if_incoming;
@@ -91,6 +128,7 @@ static u32 batadv_v_elp_get_throughput(struct batadv_hardif_neigh_node *neigh)
 	 * cfg80211 API
 	 */
 	if (batadv_is_wifi_hardif(hard_iface)) {
+
 		if (!batadv_is_cfg80211_hardif(hard_iface))
 			/* unsupported WiFi driver version */
 			goto default_throughput;
@@ -99,9 +137,26 @@ static u32 batadv_v_elp_get_throughput(struct batadv_hardif_neigh_node *neigh)
 		if (!real_netdev)
 			goto default_throughput;
 
+		/**
+		* cfg80211_get_station - retrieve information about a given station
+		* @dev: the device where the station is supposed to be connected to
+		* @mac_addr: the mac address of the station of interest
+		* @sinfo: pointer to the structure to fill with the information
+		*
+		* Returns 0 on success and sinfo is filled with the available information
+		* otherwise returns a negative error code and the content of sinfo has to be
+		* considered undefined.
+		*/
 		ret = cfg80211_get_station(real_netdev, neigh->addr, &sinfo);
 
+		/**
+		*	dev_put - release reference to device
+		*	@dev: network device
+		*
+		* Release reference to device to allow it to be freed.
+		*/
 		dev_put(real_netdev);
+		// ret is equal of error message : "/* No such file or directory */"
 		if (ret == -ENOENT) {
 			/* Node is not associated anymore! It would be
 			 * possible to delete this neighbor. For now set
