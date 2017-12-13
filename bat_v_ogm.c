@@ -1321,17 +1321,42 @@ free_skb:
  *
  * Return: 0 on success or a negative error code in case of failure
  */
+
+//En cada interfaz batman de un nodo, se almacena informacion de varios tipos.
+// batadv_v_ogm_init se encarga de inicializar el buffer OGM y la workqueue preparando
+// un paquete OGM inicial
+//retorna 0 si no hay problemas, o el numero de error si falla al asignar memoria 
+
+//Es invocada en
+//bat_v.c: batadv_v_mesh_init
+//  batadv_v_mesh_init recibe por parametro una mesh interface con toda su informacion,
+// donde se inicializan todos los recursos privados para una mesh y para ello se utiliza 
+ // batadv_v_ogm_init
+
+
+//Las secuencias de llamado a batadv_v_ogm_init son las siguientes 
+//batadv_v_mesh_init----->batadv_v_ogm_init
+
+//batadv_v_ogm_free se publica en bat_v_ogm.h
 int batadv_v_ogm_init(struct batadv_priv *bat_priv)
 {
+	// definicion de un paquete ogm2 (routing protocol)
 	struct batadv_ogm2_packet *ogm_packet;
 	unsigned char *ogm_buff;
 	u32 random_seqno;
 
+	// inicializacion de la longitud del buffer con el tamaño de un paquete definido 
+	// por la siguiente macro sizeof(struct batadv_ogm2_packet)
 	bat_priv->bat_v.ogm_buff_len = BATADV_OGM2_HLEN;
+	// funcion del kernel para asignar memoria. La memoria está configurada en cero.
 	ogm_buff = kzalloc(bat_priv->bat_v.ogm_buff_len, GFP_ATOMIC);
+	// si hay un error al asignar memoria se retorna el error correspondiente a fuera de memoria
 	if (!ogm_buff)
 		return -ENOMEM;
 
+	//si llega aca es porque se realizo correctamente el pedido de memoria
+	//asignacion del buffer creado al de la inteface pasada por parametro
+	//Inicializacion del paquete OGM declarado en la funcion con valores iniciales
 	bat_priv->bat_v.ogm_buff = ogm_buff;
 	ogm_packet = (struct batadv_ogm2_packet *)ogm_buff;
 	ogm_packet->packet_type = BATADV_OGM2;
@@ -1342,7 +1367,9 @@ int batadv_v_ogm_init(struct batadv_priv *bat_priv)
 
 	/* randomize initial seqno to avoid collision */
 	get_random_bytes(&random_seqno, sizeof(random_seqno));
+	//seteo del valor obtenido en la sentencia anterior
 	atomic_set(&bat_priv->bat_v.ogm_seqno, random_seqno);
+	//se setea timer y tflags para iniciar el envio de OGMs
 	INIT_DELAYED_WORK(&bat_priv->bat_v.ogm_wq, batadv_v_ogm_send);
 
 	return 0;
@@ -1352,6 +1379,24 @@ int batadv_v_ogm_init(struct batadv_priv *bat_priv)
  * batadv_v_ogm_free - free OGM private resources
  * @bat_priv: the bat priv with all the soft interface information
  */
+
+//En cada interfaz batman de un nodo, se almacena informacion de varios tipos.
+//Entre esa informacion se almacena el buffer de los paquetes ogm junto con la cola de trabajo de los paquetes
+// OGM
+//Esta funcion (batadv_v_ogm_free) recibe una interfaz, y se encarga de liberar la memoria del buffer OGM
+//y setear los valores iniciales
+//Si puede hacerlo, devuelve el puntero, y si no puede, devuelve NULL
+
+//Es invocada en
+//bat_v.c: batadv_v_mesh_free
+//  batadv_v_mesh_free recibe por parametro una mesh interface, para la cual la unica funcionalidad es llamar 
+// a batadv_v_ogm_free donde se liberan los recursos privados de los paquetes OGM de la interface
+
+//Las secuencias de llamado a batadv_v_ogm_free son las siguientes 
+//batadv_v_mesh_free----->batadv_v_ogm_free
+
+//batadv_v_ogm_free se publica en bat_v_ogm.h
+
 void batadv_v_ogm_free(struct batadv_priv *bat_priv)
 {
 	/**
@@ -1363,10 +1408,13 @@ void batadv_v_ogm_free(struct batadv_priv *bat_priv)
 	 * Return:
 	 * %true if @dwork was pending, %false otherwise.
 	 */
+	// cancela los trabajos retrasados de la workqueue
+	//retornando true si habia trabajos pendientes o false en caso contrario	 
  	cancel_delayed_work_sync(&bat_priv->bat_v.ogm_wq);
 
-	//kernel function to free memory
+	//funcion del kernel para liberar la memoria del buffer OGM
 	kfree(bat_priv->bat_v.ogm_buff);
+	//Inicializa los valores del buffer en vacio
 	bat_priv->bat_v.ogm_buff = NULL;
 	bat_priv->bat_v.ogm_buff_len = 0;
 }
