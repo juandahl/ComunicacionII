@@ -989,14 +989,29 @@ batadv_v_ogm_process_per_outif(struct batadv_priv *bat_priv,
  *
  * Return: true if there is enough space for another OGM, false otherwise.
  */
+//batadv_v_ogm_aggr_packet recibe como parametro la posicion actual en el buffer, la longitud total del buffer
+//y la longitud tvlv del OGM considerado previamente
+//Chequea si existe otro OGM en el buffer sea porque la longitud actual es menor a la longitud del buffer
+//o porque no supero el maximo de bytes
+
+//Es invocada en
+//bat_v_ogm.c: batadv_v_ogm_packet_recv
+// batadv_v_ogm_packet_recv utiliza como condicion de loop para procesar cada paquete OGM que esta en el buffer.
+//Mientras batadv_v_ogm_aggr_packet sea true significa que hay mas OGMs para procesar.
+
+//Las secuencias de llamado a batadv_v_ogm_aggr_packet son las siguientes 
+//batadv_v_ogm_packet_recv----->batadv_v_ogm_aggr_packet
 static bool batadv_v_ogm_aggr_packet(int buff_pos, int packet_len,
 				     __be16 tvlv_len)
 {
+	//inicializacion de variable
 	int next_buff_pos = 0;
 
+	//actualiza con la posicion actual en el buffer sumando el tamaño de otro paquete
 	next_buff_pos += buff_pos + BATADV_OGM2_HLEN;
 	next_buff_pos += ntohs(tvlv_len);
 
+	//return true si hay espacio para otro OGM, sino retorna false
 	return (next_buff_pos <= packet_len) &&
 	       (next_buff_pos <= BATADV_MAX_AGGREGATION_BYTES);
 }
@@ -1007,6 +1022,21 @@ static bool batadv_v_ogm_aggr_packet(int buff_pos, int packet_len,
  * @ogm_offset: offset to the OGM which should be processed (for aggregates)
  * @if_incoming: the interface where this packet was receved
  */
+
+//batadv_v_ogm_process recibe como parametro el socket buffer, el offset del ogm y la interfaz entrante. 
+// se encarga de un paquete OGM recibido a partir de una interfaz, el buffer y el offset pasados por parametro.
+// Hace diferentes controles para chequear si debe descartar el paquete o procesarlo. Por ejemplo si la metrica
+//es cero, si no hay vecinos, etc.
+//Procesarlo implica actualizar la metrica de rendimiento, chequear si es necesario realizar broadcast,
+//y procesar el paquete por la interfaz saliente. 
+// Tambien se decrementa el contador de referencia de la interfaz y posiblemente se libera la memoria
+
+//Es invocada en
+//bat_v_ogm.c: batadv_v_ogm_packet_recv
+// batadv_v_ogm_packet_recv utiliza a batadv_v_ogm_process por cada paquete OGM que esta en el buffer. 
+
+//Las secuencias de llamado a batadv_v_ogm_process son las siguientes 
+//batadv_v_ogm_packet_recv----->batadv_v_ogm_process
 static void batadv_v_ogm_process(const struct sk_buff *skb, int ogm_offset,
 				 struct batadv_hard_iface *if_incoming)
 {
@@ -1027,7 +1057,8 @@ static void batadv_v_ogm_process(const struct sk_buff *skb, int ogm_offset,
 
 	ogm_throughput = ntohl(ogm_packet->throughput);
 
-	/* add log */
+	//Agrega log informando que recibió un paquete OGM a prcesar con informacion de la interfaz 
+	// e informacion del paquete como throughput, ttl, version, etc 
 	batadv_dbg(BATADV_DBG_BATMAN, bat_priv,
 		   "Received OGM2 packet via NB: %pM, IF: %s [%pM] (from OG: %pM, seqno %u, troughput %u, TTL %u, V %u, tvlv_len %u)\n",
 		   ethhdr->h_source, if_incoming->net_dev->name,
@@ -1035,9 +1066,10 @@ static void batadv_v_ogm_process(const struct sk_buff *skb, int ogm_offset,
 		   ntohl(ogm_packet->seqno), ogm_throughput, ogm_packet->ttl,
 		   ogm_packet->version, ntohs(ogm_packet->tvlv_len));
 
-	/* If the troughput metric is 0, immediately drop the packet. No need to
-	 * create orig_node / neigh_node for an unusable route.
-	 */
+	 
+	 //si el throughput es cero se descarta el paquete y termina el procedimiento
+	//tambien se agrega un log informando que la metrica throughput es cero 
+	//no hay necesidad de seguir procesando ya que la ruta es inutilizable
 	if (ogm_throughput == 0) {
 		batadv_dbg(BATADV_DBG_BATMAN, bat_priv,
 			   "Drop packet: originator packet with troughput metric of 0\n");
@@ -1045,46 +1077,46 @@ static void batadv_v_ogm_process(const struct sk_buff *skb, int ogm_offset,
 	}
 
 	/* require ELP packets be to received from this neighbor first */
+	//si llega aca es porque la metrica no es cero.
+	//requiere recibir paquetes ELP de sus vecinos primero. 
+	//La funcion devuelve un vecino por la interfaz entrante   
 	hardif_neigh = batadv_hardif_neigh_get(if_incoming, ethhdr->h_source);
+
+	//chequa si hay vecinos
+	//si no hay descarta el paquete y crea un log con esta informacion
 	if (!hardif_neigh) {
 		batadv_dbg(BATADV_DBG_BATMAN, bat_priv,
 			   "Drop packet: OGM via unknown neighbor!\n");
 		goto out;
 	}
 
-	/**
-	 * batadv_v_ogm_orig_get - retrieve and possibly create an originator node
-	 * @bat_priv: the bat priv with all the soft interface information
-	 * @ogm_packet->orig: the address of the originator
-	 *
-	 * Return: the orig_node corresponding to the specified address. If such object
-	 * does not exist it is allocated here. In case of allocation failure returns
-	 * NULL.
-	 */
+	//si pasa es poruqe existe un vecino
+	 
+	//En orig_node se guarda o crea un originator node a partir de la interfaz
+	// y la direccion del originator
 	orig_node = batadv_v_ogm_orig_get(bat_priv, ogm_packet->orig);
+	//si orig_node hay un null es porque hubo fallas de asignacion y termina el metodo 
 	if (!orig_node)
 		return;
 
-	/**
-	 * batadv_neigh_node_get_or_create - retrieve or create a neigh node object
-	 * @orig_node: originator object representing the neighbour
-	 * @if_incoming: the interface where the neighbour is connected to
-	 * @ethhdr->h_source: the mac address of the neighbour interface
-	 *
-	 * Return: the neighbour node if found or created or NULL otherwise.
-	 */	
+
+	//recupera o crea un nodo vecino a partir del nodo origen, la inferfaz entrante y la mac
+	//si no lo encuentra o no lo puede crear devuelve null
 	neigh_node = batadv_neigh_node_get_or_create(orig_node, if_incoming,
 						     ethhdr->h_source);
+	//si es null entra al if se redirige  
 	if (!neigh_node)
 		goto out;
 
-	/* Update the received throughput metric to match the link
-	 * characteristic:
-	 *  - If this OGM traveled one hop so far (emitted by single hop
-	 *    neighbor) the path throughput metric equals the link throughput.
-	 *  - For OGMs traversing more than hop the path throughput metric is
-	 *    the smaller of the path throughput and the link throughput.
-	 */
+	//si llega aca es porque neigh_node tiene un nodo  con la info de vecinos
+
+
+	//Actualiza la metrica de throughput recibida para que coincida con las caracteristicas
+	//del enlace:
+	// - Si el paquete OGM fue emitido por un vecino la metrica de rendimiento del camino es igual 
+	//a la del enlace
+	// - Para los OGMs que atraviesan mas de un salto, la metrica de rendimiento del camino es la
+	// mas pequeña del rendimiento del camino y del enlace
 	link_throughput = ewma_throughput_read(&hardif_neigh->bat_v.throughput);
 	path_throughput = min_t(u32, link_throughput, ogm_throughput);
 	ogm_packet->throughput = htonl(path_throughput);
@@ -1099,6 +1131,7 @@ static void batadv_v_ogm_process(const struct sk_buff *skb, int ogm_offset,
 	 * @if_incoming: the interface where this packet was received
 	 * @BATADV_IF_DEFAULT: the interface for which the packet should be considered
 	 */
+	//procesa un batman v OGM para un interfaz saliente
 	batadv_v_ogm_process_per_outif(bat_priv, ethhdr, ogm_packet, orig_node,
 				       neigh_node, if_incoming,
 				       BATADV_IF_DEFAULT);
@@ -1106,44 +1139,45 @@ static void batadv_v_ogm_process(const struct sk_buff *skb, int ogm_offset,
 	//Kernel function. mark the beginning of an RCU read-side critical section
 	rcu_read_lock();
 	
-	/**
-	   MACRO
-	 * list_for_each_entry_rcu	-	iterate over rcu list of given type
-	 *
-	 * This list-traversal primitive may safely run concurrently with
-	 * the _rcu list-mutation primitives such as list_add_rcu()
-	 * as long as the traversal is guarded by rcu_read_lock().
-	 */
+	
+	//Macro que itera sobre la lista rcu.
+	//Se corre concurrentemente las entradas( por eso la sentencia anterior
+	// para manejar la concurrencia)
 	list_for_each_entry_rcu(hard_iface, &batadv_hardif_list, list) {
+		//si la interfaz no esta activa entra al if
 		if (hard_iface->if_status != BATADV_IF_ACTIVE)
+			//Fuerza a que comience una nueva vuelta dentro del ciclo
 			continue;
 
+		//si ambas interfaces son distintas entra al if
 		if (hard_iface->soft_iface != bat_priv->soft_iface)
+			//Fuerza a que comience una nueva vuelta dentro del ciclo	
 			continue;
+
 
 		if (!kref_get_unless_zero(&hard_iface->refcount))
+			//Fuerza a que comience una nueva vuelta dentro del ciclo
 			continue;
 
-		/**
-		 * batadv_hardif_no_broadcast - check whether (re)broadcast is necessary
-		 * @hard_iface: the outgoing interface checked and considered for (re)broadcast
-		 * @ogm_packet->orig: the originator of this packet
-		 * @hardif_neigh->orig: originator address of the forwarder we just got the packet from
-		 *  (NULL if we originated)
-		 *
-		 * Checks whether a packet needs to be (re)broadcasted on the given interface.
-		 *
-		 * Return:
-		 *	BATADV_HARDIF_BCAST_NORECIPIENT: No neighbor on interface
-		 *	BATADV_HARDIF_BCAST_DUPFWD: Just one neighbor, but it is the forwarder
-		 *	BATADV_HARDIF_BCAST_DUPORIG: Just one neighbor, but it is the originator
-		 *	BATADV_HARDIF_BCAST_OK: Several neighbors, must broadcast
-		 */
+
+
+		//chequea si es necesario (re)enviar por broadcast
+		//se pasa hard_iface que es la interface de salida
+		// ogm_packet->orig el paquete de origen a ser retrasmitido
+		//hardif_neigh->orig la direccion del originador de quien envia
 		ret = batadv_hardif_no_broadcast(hard_iface,
 						 ogm_packet->orig,
 						 hardif_neigh->orig);
 
+		//analiza el valor de ret ya que puede ser:
+		/**
+		 *	BATADV_HARDIF_BCAST_NORECIPIENT: Sin vecino o interfaz
+		 *	BATADV_HARDIF_BCAST_DUPFWD: Solo un vecino pero es quien despachó el paquete
+		 *	BATADV_HARDIF_BCAST_DUPORIG: Solo un vecino pero es quien creo el paquete(originator)
+		 *	BATADV_HARDIF_BCAST_OK: Muchos vecinos, debe trasmitirse por broadcast
+		 */
 		if (ret) {
+			//se actualiza el tipo de acuerto al valor de ret
 			char *type;
 			switch (ret) {
 			case BATADV_HARDIF_BCAST_NORECIPIENT:
@@ -1159,29 +1193,23 @@ static void batadv_v_ogm_process(const struct sk_buff *skb, int ogm_offset,
 				type = "unknown";
 			}
 
-			/* Add a log */
+			//se agrega un log con la informacion del paquete y el tipo
 			batadv_dbg(BATADV_DBG_BATMAN, bat_priv, "OGM2 packet from %pM on %s surpressed: %s\n",
 				   ogm_packet->orig, hard_iface->net_dev->name,
 				   type);
 
-			/**
-			 * batadv_hardif_put - decrement the hard interface refcounter and possibly
-			 *  release it
-			 * @hard_iface: the hard interface to free
-			 */
+
+			//decrementa el refcounter de hard_iface y posiblemente lo libera
  			batadv_hardif_put(hard_iface);
+			//avanza al siguiente loop
 			continue;
 		}
-		/**
-		 * batadv_v_ogm_process_per_outif - process a batman v OGM for an outgoing if
-		 * @bat_priv: the bat priv with all the soft interface information
-		 * @ethhdr: the Ethernet header of the OGM2
-		 * @ogm_packet: OGM2 structure
-		 * @orig_node: Originator structure for which the OGM has been received
-		 * @neigh_node: the neigh_node through with the OGM has been received
-		 * @if_incoming: the interface where this packet was received
-		 * @hard_iface: the interface for which the packet should be considered
-		 */
+
+		//procesa un paquete OGM por una interfaz saliente para eso pasa por parametro
+		//bat_priv con la informacion de la interfaz
+		//el header ethernet del OGM2
+		//el nodo origen y vecino por el cual ha sido, 
+		//y la interfaz por la cual el paquete deberia ser considerado
  		batadv_v_ogm_process_per_outif(bat_priv, ethhdr, ogm_packet,
 					       orig_node, neigh_node,
 					       if_incoming, hard_iface);
@@ -1191,32 +1219,27 @@ static void batadv_v_ogm_process(const struct sk_buff *skb, int ogm_offset,
 		 *  release it
 		 * @hard_iface: the hard interface to free
 		 */
+ 		//decrement the hard interface refcounter and possibly
+		// release it
  		batadv_hardif_put(hard_iface);
 	}
 	//Kernel function. Marks the end of an RCU read-side critical section.
 	rcu_read_unlock();
 out: 
+	//chequea por que condicion llego al out para decrementar el refcounter 
 	if (orig_node)
-		/**
-		 * batadv_orig_node_put - decrement the orig node refcounter and possibly
-		 *  release it
-		 * @orig_node: the orig node to free
-		 */
+		 // batadv_orig_node_put - decrement the orig node refcounter and possibly
+		 //  release it
 		batadv_orig_node_put(orig_node);
 	if (neigh_node)
-		/**
-		 * batadv_neigh_node_put - decrement the neighbors refcounter and possibly
-		 *  release it
-		 * @neigh_node: neigh neighbor to free
-		 */
+		
+		 // batadv_neigh_node_put - decrement the neighbors refcounter and possibly
+		 //  release it
 		batadv_neigh_node_put(neigh_node);
 	if (hardif_neigh)
-		/**
-		 * batadv_hardif_neigh_put - decrement the hardif neighbors refcounter
-		 *  and possibly release it
-		 * @hardif_neigh: hardif neigh neighbor to free
-		 */
-		batadv_hardif_neigh_put(hardif_neigh);
+		 // batadv_hardif_neigh_put - decrement the hardif neighbors refcounter
+		 //  and possibly release it
+		 batadv_hardif_neigh_put(hardif_neigh);
 }
 
 /**
@@ -1227,11 +1250,29 @@ out:
  * Return: NET_RX_SUCCESS and consume the skb on success or returns NET_RX_DROP
  * (without freeing the skb) on failure
  */
+
+// batadv_v_ogm_packet_recv recibe como parametro el socket buffer y la interfaz entrante. 
+// se encarga de manenar los paquetes OGM recibidos a partir de una interfaz y un paquete OGM pasada por parametro.
+// Si existe algun error o la mac origen del paquete pertenece a la mesh se descarta el paquete sino se procesa 
+// llamando al metodo batadv_v_ogm_process
+
+//Es invocada en
+//bat_v.c: batadv_v_init
+//batadv_v_init  no recibe parametros. Su tarea es inicializar todos los subcomponentes 
+//entre ellos los handler de los registros de paquetes OGM y ELP.
+
+//Las secuencias de llamado a batadv_v_ogm_packet_recv son las siguientes 
+//batadv_v_init----->batadv_v_ogm_packet_recv
+
+//batadv_v_ogm_packet_recv se publica en bat_v_ogm.h
 int batadv_v_ogm_packet_recv(struct sk_buff *skb,
 			     struct batadv_hard_iface *if_incoming)
 {
+
 	struct batadv_priv *bat_priv = netdev_priv(if_incoming->soft_iface);
+	//se crea un paquete OGM
 	struct batadv_ogm2_packet *ogm_packet;
+	//se crea un frame ethernet
 	struct ethhdr *ethhdr = eth_hdr(skb);
 	int ogm_offset;
 	u8 *packet_pos;
@@ -1240,24 +1281,27 @@ int batadv_v_ogm_packet_recv(struct sk_buff *skb,
 	/* did we receive a OGM2 packet on an interface that does not have
 	 * B.A.T.M.A.N. V enabled ?
 	 */
+	// chequea si se recibio un paquete OGM2 en una interfaz que no tiene 
+	//B.A.T.M.A.N v habilitado.
+	//Si no lo tiene habilitado entra al if y se libera el buffer
 	if (strcmp(bat_priv->algo_ops->name, "BATMAN_V") != 0)
 		goto free_skb;
 
-	/* Check if the packet recieved is not wrong */
+	//Si llega aca es porque tiene B.A.T.M.A.N V habilitado 
+	// Chequea si el paquete recibido no esta mal
+	//si hay fallas en el paquete entra al if y se libera tambien el buffer
 	if (!batadv_check_management_packet(skb, if_incoming, BATADV_OGM2_HLEN))
 		goto free_skb;
 
-	/**
-	 * batadv_is_my_mac - check if the given mac address belongs to any of the real
-	 * interfaces in the current mesh
-	 * @bat_priv: the bat priv with all the soft interface information
-	 * @ethhdr->h_source: the address to check
-	 *
-	 * Return: 'true' if the mac address was found, false otherwise.
-	 */
+	
+	//si llega aca es porque el paquete es correcto y la interfaz tiene B.A.T.M.A.N V  habilitado.
+	//Se chequea si la direccion mac de la direccion origen del frame pertenece a algunas de las interfaces de la mesh actual
+	//si sucede lo anterior se libera el buffer.
  	if (batadv_is_my_mac(bat_priv, ethhdr->h_source))
 		goto free_skb;
 
+	//si se llega aca el frame ethernet no fue enviado por un vecino
+	//se lee un paquete OGM del buffer
 	ogm_packet = (struct batadv_ogm2_packet *)skb->data;
 
 	/**
@@ -1268,14 +1312,22 @@ int batadv_v_ogm_packet_recv(struct sk_buff *skb,
 	 *
 	 * Return: 'true' if the mac address was found, false otherwise.
 	 */
+
+	//Se chequea si la direccion mac de la direccion origen del paquete leido del buffer
+	// pertenece a algunas de las interfaces de la mesh actual
+	//si sucede lo anterior se libera el buffer.
 	if (batadv_is_my_mac(bat_priv, ogm_packet->orig))
 		goto free_skb;
 
+	// incrementa el contador de trafico de paquetes protocol routing de la mesh
 	batadv_inc_counter(bat_priv, BATADV_CNT_MGMT_RX);
+	// incrementa la cantidad de bytes de trafico de paquetes protocol routing de la mesh
 	batadv_add_counter(bat_priv, BATADV_CNT_MGMT_RX_BYTES,
 			   skb->len + ETH_HLEN);
 
+	//setea offset de ogm en cero
 	ogm_offset = 0;
+	//obtiene el paquete OGM del frame ethernet
 	ogm_packet = (struct batadv_ogm2_packet *)skb->data;
 
 	/**
@@ -1286,6 +1338,7 @@ int batadv_v_ogm_packet_recv(struct sk_buff *skb,
 	 *
 	 * Return: true if there is enough space for another OGM, false otherwise.
 	 */
+	//loop o recorrido de cada paquete OGM 
  	while (batadv_v_ogm_aggr_packet(ogm_offset, skb_headlen(skb),
 					ogm_packet->tvlv_len)) {
 		/**
@@ -1294,8 +1347,10 @@ int batadv_v_ogm_packet_recv(struct sk_buff *skb,
 		 * @ogm_offset: offset to the OGM which should be processed (for aggregates)
 		 * @if_incoming: the interface where this packet was receved
 		 */
+ 		// se procesa el paquete OGM de la interfaz entrante 
  		batadv_v_ogm_process(skb, ogm_offset, if_incoming);
 
+ 		//se actualiza los offsets para avanzar en la skb
 		ogm_offset += BATADV_OGM2_HLEN;
 		ogm_offset += ntohs(ogm_packet->tvlv_len);
 
@@ -1303,15 +1358,18 @@ int batadv_v_ogm_packet_recv(struct sk_buff *skb,
 		ogm_packet = (struct batadv_ogm2_packet *)packet_pos;
 	}
 
+	// NET_RX_SUCCESS es 0 y significa que no hubo errores
  	ret = NET_RX_SUCCESS;
 
 free_skb:
+	//Si no tiene el BATMAN V habilitado, si hay fallas en el paquete, si el paquete fue enviado por un vecino
+	// entra aca y se libera el paquete
 	if (ret == NET_RX_SUCCESS)
 		consume_skb(skb);
 	else
 		kfree_skb(skb);
 
-	// return NET_RX_SUCCESS and consume the skb on success or returns NET_RX_DROP
+	// return NET_RX_SUCCESS (0) si no hubo errores. Sino retorna NET_RX_DROP
 	return ret;
 }
 
