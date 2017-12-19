@@ -107,45 +107,54 @@ static void batadv_v_elp_start_timer(struct batadv_hard_iface *hard_iface)
  *         (a value of '1' equals to 0.1Mbps, '10' equals 1Mbps, etc).
  */
 
- //La funcion 'batadv_v_elp_get_throughput' recibe la interfaz vecina para la cual se debe obtener el rendimiento. El calculo del mismo consiste
+// La funcion 'batadv_v_elp_get_throughput' recibe la interfaz vecina para la cual se 
+// debe obtener el rendimiento. Este rendimiento se obtiene en multiplos de 100kpbs, siguiendo la escala de : 1 = 0.1 Mbps, 10 = 1Mbps.
+// Para ello se tiene en cuenta: 
+//               		-si el usuario especificó un valor personalizado para esta interfaz, entonces se devuelve directamente
+//				-si se trata de un dispositivo inalámbrico (WIFI), pregúntele a través de su rendimiento cfg80211 API
+//				-si no puede encontrar informacion sobre la interfaz de interes, retorno 0 (cero). En caso contrario,
+//				 retorno el valor del rendimiento esperado hacia esta estacion (sobre 100).
+//				-
 static u32 batadv_v_elp_get_throughput(struct batadv_hardif_neigh_node *neigh)
 {
+	//Se obtiene el puntero a la interfaz entrante vecina
 	struct batadv_hard_iface *hard_iface = neigh->if_incoming;
+	//Perteneciente al kernel
 	struct ethtool_link_ksettings link_settings;
+	// Esta estructura contine datos estrictamente de "alto nivel", y conoce
+  	// casi cada estructura de datos utilizada en el módulo INET.
 	struct net_device *real_netdev;
 	struct station_info sinfo;
 	u32 throughput;
 	int ret;
 
-	/* if the user specified a customised value for this interface, then
-	 * return it directly
-	 */
+	// si el usuario especificó un valor personalizado para esta interfaz, entonces se devuelve directamente
 	throughput =  atomic_read(&hard_iface->bat_v.throughput_override);
 	if (throughput != 0)
 		return throughput;
 
-	/* if this is a wireless device, then ask its throughput through
-	 * cfg80211 API
-	 */
+	//Si se trata de un dispositivo inalámbrico (WIFI), pregúntele a través de su rendimiento cfg80211 API
 	if (batadv_is_wifi_hardif(hard_iface)) {
 
+		// si no soporta la version del driver del WIFI, va hacia el calculo del rendimiento por default
 		if (!batadv_is_cfg80211_hardif(hard_iface))
 			/* unsupported WiFi driver version */
 			goto default_throughput;
 
+		//obtengo el valor real
 		real_netdev = batadv_get_real_netdev(hard_iface->net_dev);
+		//en caso de se retorne NULL, es decir, que se produzca un error voy al culculo por default
 		if (!real_netdev)
 			goto default_throughput;
-
 		/**
-		* cfg80211_get_station - retrieve information about a given station
-		* @dev: the device where the station is supposed to be connected to
-		* @mac_addr: the mac address of the station of interest
-		* @sinfo: pointer to the structure to fill with the information
+		* cfg80211_get_station - recupera información sobre una estación dada. Este posee los siguientes parametros:
+		* @dev: el dispositivo donde se supone que la estación está conectada a
+		* @mac_addr: la dirección MAC de la estación de interés
+		* @sinfo: puntero a la estructura para completar con la información
 		*
-		* Returns 0 on success and sinfo is filled with the available information
-		* otherwise returns a negative error code and the content of sinfo has to be
-		* considered undefined.
+		* Devuelve 0 en caso de éxito y '&sinfo' se completa con la información disponible
+		* de lo contrario devuelve un código de error negativo y el contenido de '&sinfo' tiene que ser
+		* considerado indefinido.
 		*/
 		ret = cfg80211_get_station(real_netdev, neigh->addr, &sinfo);
 
@@ -155,22 +164,25 @@ static u32 batadv_v_elp_get_throughput(struct batadv_hardif_neigh_node *neigh)
 		*
 		* Release reference to device to allow it to be freed.
 		*/
+		//libera la referencia
 		dev_put(real_netdev);
-		// ret is equal of error message : "/* No such file or directory */"
+		//si ret retorna con un error debido a que no encuentra el archivo o directorio
 		if (ret == -ENOENT) {
-			/* Node is not associated anymore! It would be
-			 * possible to delete this neighbor. For now set
-			 * the throughput metric to 0.
-			 */
+			/* El nodo ya no está asociado! Podría ser
+			* posible eliminar este vecino Por ahora establece
+			* la métrica de rendimiento a 0.
+			*/
 			return 0;
 		}
 		if (!ret)
+			//si es distinto de null, retorno el valor del rendimiento esperado hacia esta estacion.
 			return sinfo.expected_throughput / 100;
 	}
 
-	/* if not a wifi interface, check if this device provides data via
-	 * ethtool (e.g. an Ethernet adapter)
-	 */
+	/* si no es una interfaz wifi, verifique si este dispositivo proporciona datos a través de
+	* ethtool (por ejemplo, un adaptador de Ethernet)
+	*/
+	//SEGUIR ACA
 	memset(&link_settings, 0, sizeof(link_settings));
 	rtnl_lock();
 	ret = __ethtool_get_link_ksettings(hard_iface->net_dev, &link_settings);
