@@ -128,7 +128,7 @@ static void batadv_v_elp_start_timer(struct batadv_hard_iface *hard_iface)
 //Retorna el rendimiento en multiplos de 100kpbs, siguiendo la escala de : 1 = 0.1 Mbps, 10 = 1Mbps.
 static u32 batadv_v_elp_get_throughput(struct batadv_hardif_neigh_node *neigh)
 {
-	//Se obtiene el puntero a la interfaz entrante vecina
+	//Se obtiene el puntero a la interfaz entrante vecina (parametro)
 	struct batadv_hard_iface *hard_iface = neigh->if_incoming;
 	//Perteneciente al kernel
 	struct ethtool_link_ksettings link_settings;
@@ -301,11 +301,32 @@ void batadv_v_elp_throughput_metric_update(struct work_struct *work)
  *
  * Return: True on success and false in case of error during skb preparation.
  */
-//SEGUIR ACA
+
+// La funcion 'batadv_v_elp_wifi_neigh_probe' se encarga de envíar paquetes de prueba de enlace a un vecino. Por eso el parametro que 
+// recibe es el nodo vecino a sondear.
+//  Este envía un número predefinido de paquetes wifi unicast a un vecino dado en
+// orden para activar la estimación de rendimiento en este enlace por el algoritmo RC.
+// Los paquetes se envían solo si no hay suficiente tráfico de unicast de carga útil
+// hacia este vecino.
+//
+//
+//Es invocada en:
+//		-bat_v_elp.c: batadv_v_elp_periodic_work
+//		 La métrica de rendimiento se actualiza en cada paquete enviado. De esta forma, si
+//		 el nodo está muerto y ya no envía paquetes, batman-adv todavía puede reaccionar oportunamente 
+//		 a su muerte. Para probar este enlace es que se utiliza 'batadv_v_elp_wifi_neigh_probe'.
+// 
+//Las secuencias de llamados de 'batadv_v_elp_wifi_neigh_probe' son los siguientes:
+//			bat_v.c: batadv_v_iface_enable-->batadv_v_elp_iface_enable-->batadv_v_elp_periodic_work-->batadv_v_elp_wifi_neigh_probe
+//
+//Retorna true en caso de éxito y false en caso de error durante la preparación de skb.
 static bool
 batadv_v_elp_wifi_neigh_probe(struct batadv_hardif_neigh_node *neigh)
 {
+	//Se obtiene el puntero a la interfaz entrante vecina (parametro)
 	struct batadv_hard_iface *hard_iface = neigh->if_incoming;
+	
+	//obtengo la informacion privda de la intefaz vecina
 	struct batadv_priv *bat_priv = netdev_priv(hard_iface->soft_iface);
 	unsigned long last_tx_diff;
 	struct sk_buff *skb;
@@ -313,6 +334,7 @@ batadv_v_elp_wifi_neigh_probe(struct batadv_hardif_neigh_node *neigh)
 	int elp_skb_len;
 
 	/* this probing routine is for Wifi neighbours only */
+	//Si no es una interfaz Wifi retorno true
 	if (!batadv_is_wifi_hardif(hard_iface))
 		return true;
 
@@ -323,18 +345,33 @@ batadv_v_elp_wifi_neigh_probe(struct batadv_hardif_neigh_node *neigh)
 	 * generate 2 probe packets and push the RC algorithm to perform
 	 * the sampling
 	 */
+	/* Verifica al nodo vecino solo si no se han enviado paquetes unicast
+	* en los últimos 100 milisegundos: este es el control de velocidad
+	* intervalo de sampling del algoritmo ('minstrel'). De esta manera, si no
+	* se ha enviado suficiente tráfico al nodo vecino, batman-adv puede
+	* generar 2 paquetes de sondeo y pulsar el algoritmo RC para realizar
+	* el muestreo
+	*/
+	//Extrae la cantidad de milisegundo desde la ultima vez que se han enviado paquetes
 	last_tx_diff = jiffies_to_msecs(jiffies - neigh->bat_v.last_unicast_tx);
+	//#define BATADV_ELP_PROBE_MAX_TX_DIFF 100 /* milliseconds */
+	//Si este valor es menor o igual a 100 milisegundos retorno true.
 	if (last_tx_diff <= BATADV_ELP_PROBE_MAX_TX_DIFF)
 		return true;
 
+	//setea 'probe_len' con el maximo entre el tamaño del elp paket y el minimo tamaño soportado que es 200 bytes
 	probe_len = max_t(int, sizeof(struct batadv_elp_packet),
 			  BATADV_ELP_MIN_PROBE_SIZE);
 
+	//Itera 2 veces por nodo ya que 'BATADV_ELP_PROBES_PER_NODE' por definicion vale 2
 	for (i = 0; i < BATADV_ELP_PROBES_PER_NODE; i++) {
+		//obtengo la longitud de mensaje el mensaje ELP para enviar
 		elp_skb_len = hard_iface->bat_v.elp_skb->len;
+		//completo los bytes para que alcance al tamaño minimo.
 		skb = skb_copy_expand(hard_iface->bat_v.elp_skb, 0,
 				      probe_len - elp_skb_len,
 				      GFP_ATOMIC);
+		//si se produce algun error retorno false
 		if (!skb)
 			return false;
 
@@ -342,8 +379,11 @@ batadv_v_elp_wifi_neigh_probe(struct batadv_hardif_neigh_node *neigh)
 		 * the packet to be exactly of that size to make the link
 		 * throughput estimation effective.
 		 */
+		//setea al skb para que sea tan grande como el espacio asignado (esto se hace para que el
+		//paquete sea exactamente de ese tamaño y la estimación del rendimiento del enlace sea efectiva.
 		skb_put(skb, probe_len - hard_iface->bat_v.elp_skb->len);
 
+		//logueo de la accion
 		batadv_dbg(BATADV_DBG_BATMAN, bat_priv,
 			   "Sending unicast (probe) ELP packet on interface %s to %pM\n",
 			   hard_iface->net_dev->name, neigh->addr);
@@ -365,9 +405,10 @@ batadv_v_elp_wifi_neigh_probe(struct batadv_hardif_neigh_node *neigh)
 		* guarantee the frame will be transmitted as it may be dropped due
 		* to congestion or traffic shaping.
 		*/
+		//envia el packet ya preparado
 		batadv_send_skb_packet(skb, hard_iface, neigh->addr);
 	}
-
+	//una vez enviados retorna TRUE.
 	return true;
 }
 
@@ -377,8 +418,25 @@ batadv_v_elp_wifi_neigh_probe(struct batadv_hardif_neigh_node *neigh)
  *
  * Emits broadcast ELP message in regular intervals.
  */
+//
+//La funcion 'batadv_v_elp_periodic_work' se encarga de emitir los mensajes ELP en modo broadcast a todos los vecinos si las condiciones estan dadas.
+//Dichas condiciones son:
+//			-si  el estado actual del mesh esta activado
+//			-si la interfaz  no esta en uso o eliminada
+//			-si la interfaz  se encuentra activada
+//Una vez verificado todo esto, se en bradcast a todos sus nodos vecinos.
+//
+//Es invocada en:
+//		-bat_v_elp.c: batadv_v_elp_iface_enable.
+// 		 Se utiliza a la hora de habilitar las interfaces ELP.
+//Las secuencias de llamados de 'batadv_v_elp_periodic_work' son los siguientes:
+//			
+//Emite los mensajes ELP en modo broadcast a todos los nodos vecinos de la interfaz en un periodo dado.
+static bool
+
 static void batadv_v_elp_periodic_work(struct work_struct *work)
 {
+	//declaracion de estructuras utilizadas en la funcion
 	struct batadv_hardif_neigh_node *hardif_neigh;
 	struct batadv_hard_iface *hard_iface;
 	struct batadv_hard_iface_bat_v *bat_v;
@@ -387,20 +445,25 @@ static void batadv_v_elp_periodic_work(struct work_struct *work)
 	struct sk_buff *skb;
 	u32 elp_interval;
 
+	//asignacion de las estructuras 
 	bat_v = container_of(work, struct batadv_hard_iface_bat_v, elp_wq.work);
 	hard_iface = container_of(bat_v, struct batadv_hard_iface, bat_v);
 	//access network device private data
+	//acceso a la informacion privada del dispositivo de red
 	bat_priv = netdev_priv(hard_iface->soft_iface);
 
+	// si  el estado actual del mesh es desativada sale de la funcion
 	if (atomic_read(&bat_priv->mesh_state) == BATADV_MESH_DEACTIVATING)
 		goto out;
 
-	/* we are in the process of shutting this interface down */
+	/*we are in the process of shutting this interface down*/
+	// lo mismo ocurre si no esta en uso o ha sido elminada.
 	if ((hard_iface->if_status == BATADV_IF_NOT_IN_USE) ||
 	    (hard_iface->if_status == BATADV_IF_TO_BE_REMOVED))
 		goto out;
 
 	/* the interface was enabled but may not be ready yet */
+	//en caso de que este habilida pero no activa, invoca a la funcion 'batadv_v_elp_start_timer' para reiniciar el timer
 	if (hard_iface->if_status != BATADV_IF_ACTIVE)
 		goto restart_timer;
 
@@ -420,15 +483,22 @@ static void batadv_v_elp_periodic_work(struct work_struct *work)
  *	function is not recommended for use in circumstances when only
  *	header is going to be modified. Use pskb_copy() instead.
  */
+	//realiza una copia del elp skb
 	skb = skb_copy(hard_iface->bat_v.elp_skb, GFP_ATOMIC);
+	// en caso de ocurrir un error en la creacion, se reiniciara  la interfaz, invocando a la funcion 'batadv_v_elp_start_timer'.
 	if (!skb)
 		goto restart_timer;
 
+	//Una vez llegado a esta instancia se obtienen los datos de configuracion
+	//los datos
 	elp_packet = (struct batadv_elp_packet *)skb->data;
+	//número actual de secuencia de ELP 
 	elp_packet->seqno = htonl(atomic_read(&hard_iface->bat_v.elp_seqno));
+	//tiempo de intervalo entre 2 transmisiones ELP
 	elp_interval = atomic_read(&hard_iface->bat_v.elp_interval);
 	elp_packet->elp_interval = htonl(elp_interval);
 
+	//logueo de las acciones
 	batadv_dbg(BATADV_DBG_BATMAN, bat_priv,
 		   "Sending broadcast ELP packet on interface %s, seqno %u\n",
 		   hard_iface->net_dev->name,
@@ -453,6 +523,7 @@ static void batadv_v_elp_periodic_work(struct work_struct *work)
 	* guarantee the frame will be transmitted as it may be dropped due
 	* to congestion or traffic shaping.
 	*/
+	// se envia en modo broadcast el mensaje ELP
 	batadv_send_broadcast_skb(skb, hard_iface);
 
 	atomic_inc(&hard_iface->bat_v.elp_seqno);
@@ -477,13 +548,17 @@ static void batadv_v_elp_periodic_work(struct work_struct *work)
 		pos;							\
 		pos = hlist_entry_safe(rcu_dereference_raw(hlist_next_rcu(\
 			&(pos)->member)), typeof(*(pos)), member))*/
+	//Por cada uno de los nodos vecinos de la interfaz
 	hlist_for_each_entry_rcu(hardif_neigh, &hard_iface->neigh_list, list) {
+		
+		//verifico que el enlace este en condiciones de transmitir
 		if (!batadv_v_elp_wifi_neigh_probe(hardif_neigh))
 			/* if something goes wrong while probing, better to stop
 			 * sending packets immediately and reschedule the task
 			 */
 			break;
 
+		//incrementa la refencias a menos que sea cero
 		if (!kref_get_unless_zero(&hardif_neigh->refcount))
 			continue;
 
@@ -491,6 +566,7 @@ static void batadv_v_elp_periodic_work(struct work_struct *work)
 		 * may sleep and that is not allowed in an rcu protected
 		 * context. Therefore schedule a task for that.
 		 */
+		//agrego a la cola de trabajo con el tiempo de delay de interfaz ('metric_word').
 		queue_work(batadv_event_workqueue,
 			   &hardif_neigh->bat_v.metric_work);
 	}
@@ -499,6 +575,7 @@ static void batadv_v_elp_periodic_work(struct work_struct *work)
 
 restart_timer:
 	//restart timer for ELP periodic work
+	// se reinicia el timer
 	batadv_v_elp_start_timer(hard_iface);
 out:
 	return;
@@ -510,6 +587,7 @@ out:
  *
  * Return: 0 on success or a -ENOMEM in case of failure.
  */
+//SEGUIR ACA
 int batadv_v_elp_iface_enable(struct batadv_hard_iface *hard_iface)
 {
 	struct batadv_elp_packet *elp_packet;
