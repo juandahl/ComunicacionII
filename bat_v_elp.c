@@ -114,7 +114,18 @@ static void batadv_v_elp_start_timer(struct batadv_hard_iface *hard_iface)
 //				-si se trata de un dispositivo inalámbrico (WIFI), pregúntele a través de su rendimiento cfg80211 API
 //				-si no puede encontrar informacion sobre la interfaz de interes, retorno 0 (cero). En caso contrario,
 //				 retorno el valor del rendimiento esperado hacia esta estacion (sobre 100).
-//				-
+//				-si no es una interfaz wifi, verifique si este dispositivo proporciona datos a través de
+//				 ethtool (por ejemplo, un adaptador de Ethernet). Luego obtiene la configuracion de la conexion y solicita su rendimiento (speed).
+//				-Por ultimo, en caso de tener problemas tanto en la conexion inalambrica como en la ethernet, retorna un valor por defecto de 1 Mbps (seteado como macro en el main de B.A.T.M.A.N).
+//
+//Es invocada en:
+//	-bat_v_elp.c: batadv_v_elp_throughput_metric_update
+//	 Se utiliza para actualizar la métrica de rendimiento de un vecino de un solo salto.
+//
+//Las secuencias de llamados de 'batadv_v_elp_get_throughput' son los siguientes:
+// -batadv_v_hardif_neigh_init-->batadv_v_elp_throughput_metric_update-->batadv_v_elp_get_throughput
+//
+//Retorna el rendimiento en multiplos de 100kpbs, siguiendo la escala de : 1 = 0.1 Mbps, 10 = 1Mbps.
 static u32 batadv_v_elp_get_throughput(struct batadv_hardif_neigh_node *neigh)
 {
 	//Se obtiene el puntero a la interfaz entrante vecina
@@ -166,7 +177,7 @@ static u32 batadv_v_elp_get_throughput(struct batadv_hardif_neigh_node *neigh)
 		*/
 		//libera la referencia
 		dev_put(real_netdev);
-		//si ret retorna con un error debido a que no encuentra el archivo o directorio
+		//si ret retorna con un error debido a que no encuentra el archivo o directorio entonces..
 		if (ret == -ENOENT) {
 			/* El nodo ya no está asociado! Podría ser
 			* posible eliminar este vecino Por ahora establece
@@ -182,9 +193,11 @@ static u32 batadv_v_elp_get_throughput(struct batadv_hardif_neigh_node *neigh)
 	/* si no es una interfaz wifi, verifique si este dispositivo proporciona datos a través de
 	* ethtool (por ejemplo, un adaptador de Ethernet)
 	*/
-	//SEGUIR ACA
+	// 'memset': void *memset(void *s, int c, size_t n); --> Copia el valor de c (convertido a unsigned char)
+	// en cada uno de los primeros n caracteres en el objeto apuntado por s.
 	memset(&link_settings, 0, sizeof(link_settings));
 	rtnl_lock();
+	//  Helper interno del kernel para consultar un dispositivo ethtool_link_settings.
 	ret = __ethtool_get_link_ksettings(hard_iface->net_dev, &link_settings);
 	rtnl_unlock();
 	if (ret == 0) {
@@ -193,16 +206,21 @@ static u32 batadv_v_elp_get_throughput(struct batadv_hardif_neigh_node *neigh)
 			hard_iface->bat_v.flags |= BATADV_FULL_DUPLEX;
 		else
 			hard_iface->bat_v.flags &= ~BATADV_FULL_DUPLEX;
-
+		//obtengo el rendimiento de la linea
 		throughput = link_settings.base.speed;
 		if (throughput && (throughput != SPEED_UNKNOWN))
+			//realiza la conversion
 			return throughput * 10;
 	}
 
 default_throughput:
+	//el calculo por defecto
 	if (!(hard_iface->bat_v.flags & BATADV_WARNING_DEFAULT)) {
 		batadv_info(hard_iface->soft_iface,
 			    "WiFi driver or ethtool info does not provide information about link speeds on interface %s, therefore defaulting to hardcoded throughput values of %u.%1u Mbps. Consider overriding the throughput manually or checking your driver.\n",
+			    //El controlador WiFi o la información de ethtool no proporciona información sobre velocidades de enlace en la interfaz,
+			    //por lo tanto, el valor de rendimiento codificado es de 1 Mbps. 
+			    //Considere anular manualmente el rendimiento o verifique su controlador.",
 			    hard_iface->net_dev->name,
 			    BATADV_THROUGHPUT_DEFAULT_VALUE / 10,
 			    BATADV_THROUGHPUT_DEFAULT_VALUE % 10);
@@ -210,6 +228,7 @@ default_throughput:
 	}
 
 	/* if none of the above cases apply, return the base_throughput */
+	//define BATADV_THROUGHPUT_DEFAULT_VALUE 10 /* 1 Mbps */ el valor que toma por defecto es de 1Mbps
 	return BATADV_THROUGHPUT_DEFAULT_VALUE;
 }
 
@@ -218,16 +237,50 @@ default_throughput:
  *  of a single hop neighbour
  * @work: the work queue item
  */
+// La funcion 'batadv_v_elp_throughput_metric_update' actualiza la metrica de rendimiento del nodo vecino en cuestion.
+//
+//Es invocada en:
+//	- bat_v.c: batadv_v_hardif_neigh_init
+//Las secuencias de llamados de 'batadv_v_elp_get_throughput' son los siguientes:
+// -batadv_v_hardif_neigh_init-->batadv_v_elp_throughput_metric_update
+//
+//No tiene posee valor de retorno solo actualiza el rendimiento.
 void batadv_v_elp_throughput_metric_update(struct work_struct *work)
 {
+	/**
+	 * struct batadv_hardif_neigh_node_bat_v - B.A.T.M.A.N. V private neighbor
+	 *  information
+	 * @throughput: ewma link throughput towards this neighbor
+	 * @elp_interval: time interval between two ELP transmissions
+	 * @elp_latest_seqno: latest and best known ELP sequence number
+	 * @last_unicast_tx: when the last unicast packet has been sent to this neighbor
+	 * @metric_work: work queue callback item for metric update
+	 */
+	//struct que almacena la informacion privada del nodo vecino B.A.T.M.A.N
 	struct batadv_hardif_neigh_node_bat_v *neigh_bat_v;
+	
+	/**
+	 * struct batadv_hardif_neigh_node - unique neighbor per hard-interface
+	 * @list: list node for batadv_hard_iface::neigh_list
+	 * @addr: the MAC address of the neighboring interface
+	 * @orig: the address of the originator this neighbor node belongs to
+	 * @if_incoming: pointer to incoming hard-interface
+	 * @last_seen: when last packet via this neighbor was received
+	 * @bat_v: B.A.T.M.A.N. V private data
+	 * @refcount: number of contexts the object is used
+	 * @rcu: struct used for freeing in a RCU-safe manner
+	 */
+	//struct para contener la informacion sobre el nodo vecino (unique) por interfaz fisica.
 	struct batadv_hardif_neigh_node *neigh;
 
+	//obtengo el acceso a la informacion
 	neigh_bat_v = container_of(work, struct batadv_hardif_neigh_node_bat_v,
 				   metric_work);
+	//obtengo el acceso a la informacion
 	neigh = container_of(neigh_bat_v, struct batadv_hardif_neigh_node,
 			     bat_v);
 
+	//actualizo el rendimiento del nodo vecino en cuestion obteniendolo desde 'batadv_v_elp_get_throughput'
 	ewma_throughput_add(&neigh->bat_v.throughput,
 			    batadv_v_elp_get_throughput(neigh));
 
@@ -248,6 +301,7 @@ void batadv_v_elp_throughput_metric_update(struct work_struct *work)
  *
  * Return: True on success and false in case of error during skb preparation.
  */
+//SEGUIR ACA
 static bool
 batadv_v_elp_wifi_neigh_probe(struct batadv_hardif_neigh_node *neigh)
 {
