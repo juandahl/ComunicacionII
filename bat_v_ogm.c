@@ -140,18 +140,41 @@ struct batadv_orig_node *batadv_v_ogm_orig_get(struct batadv_priv *bat_priv,
  * batadv_v_ogm_start_timer - restart the OGM sending timer
  * @bat_priv: the bat priv with all the soft interface information
  */
+//La tarea de esta funcion es reiniciar el timer de envio de paquetes OGM
+//para ello necesita la informacion de la interfaz pero principalmente la cola 
+//de trabajo de la interfaz
+// Esta funcion puede ser invocada para replanificar un envio de ogm o 
+// para activar una interfaz(por eso es que es llamada por batadv_v_ogm_send o
+// batadv_v_ogm_iface_enable)
+
+//Es invocada en
+//bat_v_ogm.c: batadv_v_ogm_send
+//Si no se puede enviar el paquete y hay que replanificar se llama a batadv_v_ogm_start_timer
+//para reiniciar el timer de envio de paquetes OGM 
+//bat_v_ogm.c: batadv_v_ogm_iface_enable
+//A partir de una interfaz pasada por parametro se prepara o inicializa valores
+//para su posterior uso
+//Luego de obtener la informacion de la interfaz, se actualiza el timer de envio
+//OGM de la interfaz con valores iniciales usando la funcion batadv_v_ogm_start_timer
+
+
+//Las secuencias de llamado a batadv_v_ogm_start_timer son las siguientes 
+//batadv_v_ogm_send----->batadv_v_ogm_start_timer
+//batadv_v_ogm_iface_enable----->batadv_v_ogm_start_timer
 static void batadv_v_ogm_start_timer(struct batadv_priv *bat_priv)
 {
 	unsigned long msecs;
 	/* this function may be invoked in different contexts (ogm rescheduling
 	 * or hard_iface activation), but the work timer should not be reset
 	 */
+	 //Determina si hay paquetes OGM pendientes en la cola de trabajo 
 	if (delayed_work_pending(&bat_priv->bat_v.ogm_wq))
 		return;
-
-	//Kernel functions.
+    //si no hay trabajo pendiente se llega aca
+	//Kernel functions para calcular intervalos de tiempo
 	msecs = atomic_read(&bat_priv->orig_interval) - BATADV_JITTER;
 	msecs += prandom_u32() % (2 * BATADV_JITTER);
+	//queue_delayed_work - queue work on a workqueue after delay
 	queue_delayed_work(batadv_event_workqueue, &bat_priv->bat_v.ogm_wq,
 			   msecs_to_jiffies(msecs));
 }
@@ -161,20 +184,43 @@ static void batadv_v_ogm_start_timer(struct batadv_priv *bat_priv)
  * @skb: the OGM to send
  * @hard_iface: the interface to use to send the OGM
  */
+
+// Recibe como parametro el paquete OGM a enviar y la interfaz por la que será enviado 
+//El metodo verifica que la interfaz no este activa(si es asi aborta)
+//Si no tiene que abortar el envio, lo realiza mediante el llamado a
+//batadv_send_broadcast_skb. Este metodo envia un paquete por una inetrfaz especificada
+//por parametro
+
+//Es invocada en
+//bat_v_ogm.c: batadv_v_ogm_send
+//Verifica que el estado de la mesh no este desactivado.
+//Se obtiene el OGM del buffer y se verifica si el paquete necesita (re)broadcast 
+// Se utiliza concurrencia para enviar a todas las interfaces. Aca es donde se usa
+// batadv_v_ogm_send_to_if para enviar el paquete a una interfaz determinada
+
+//bat_v_ogm.c: batadv_v_ogm_forward
+//El primer chequeo que se realiza es que no se reenvie por default
+//Chequea que no se envie dos veces el mismo paquete usando el numero de secuencia
+//Se controla que el paquete no tenga que ser descartado por el time to live agotado
+//Si no sucede lo anterior se reduce el ttl en 1, se agrega penalidad por reenvio 
+//y se reenvia por la interfaz saliente pasada por parametro usando el metodo  
+//batadv_v_ogm_send_to_if
+
+//Las secuencias de llamado a batadv_v_ogm_iface_enable son las siguientes 
+//batadv_v_ogm_send----->batadv_v_ogm_send_to_if
+//batadv_v_ogm_forward----->batadv_v_ogm_send_to_if
 static void batadv_v_ogm_send_to_if(struct sk_buff *skb,
 				    struct batadv_hard_iface *hard_iface)
 {
-	/**
-	 *	netdev_priv - access network device private data
-	 *	@dev: network device
-	 *
-	 * Get network device private data
-	 */	
+
+ 	//Obtiene la informacion privada del dispositivo de red
 	struct batadv_priv *bat_priv = netdev_priv(hard_iface->soft_iface);
 
+	//Si la interfaz esta ocupada(activa) termina la ejecucion
 	if (hard_iface->if_status != BATADV_IF_ACTIVE)
 		return;
 
+    //si llega aca es porque la interfaz se puede usar
 	/* Stop preemption on local cpu while incrementing the counter */
 	batadv_inc_counter(bat_priv, BATADV_CNT_MGMT_TX);
 	/* Stop preemption on local cpu while incrementing the counter */
@@ -189,31 +235,55 @@ static void batadv_v_ogm_send_to_if(struct sk_buff *skb,
  * batadv_v_ogm_send - periodic worker broadcasting the own OGM
  * @work: work queue item
  */
+//Verifica que el estado de la mesh no este desactivado.
+//Se obtiene el OGM del buffer y se verifica si el paquete necesita (re)broadcast 
+// Se utiliza concurrencia para enviar a todas las interfaces
+
+//Es invocada en
+//bat_v.c: batadv_v_ogm_init
+// batadv_v_ogm_init se encarga de inicializar el buffer OGM y la workqueue preparando
+// un paquete OGM inicial. Setea valores para preparar la cola de trabajo y es luego de esto
+//donde envia un paquete OGM llamando al metodo batadv_v_ogm_send
+
+//Las secuencias de llamado a batadv_v_ogm_iface_enable son las siguientes 
+//batadv_v_ogm_init----->batadv_v_ogm_iface_enable
+
 static void batadv_v_ogm_send(struct work_struct *work)
 {
+    //Crea struct hard_iface. Dispositivo de red conocido por BATMAN-adv
 	struct batadv_hard_iface *hard_iface;
+	//Crea struct de datos de la interfaz privada
 	struct batadv_priv_bat_v *bat_v;
+	//Crea struct de la informacion de la interfaz mesh
 	struct batadv_priv *bat_priv;
+	//Crea struct de paquete OGM
 	struct batadv_ogm2_packet *ogm_packet;
+	//crea dos struct de buffers
 	struct sk_buff *skb, *skb_tmp;
 	unsigned char *ogm_buff, *pkt_buff;
 	int ogm_buff_len;
 	u16 tvlv_len = 0;
 	int ret;
 
+    //Macro de kernel.
 	bat_v = container_of(work, struct batadv_priv_bat_v, ogm_wq.work);
 	bat_priv = container_of(bat_v, struct batadv_priv, bat_v);
 
-	//kernel function
+	//Chequea que el estado de la mesh no sea "BATADV_MESH_DEACTIVATING". De ser
+	//asi se redirige al bloque out
 	if (atomic_read(&bat_priv->mesh_state) == BATADV_MESH_DEACTIVATING)
 		goto out;
 
 	ogm_buff = bat_priv->bat_v.ogm_buff;
 	ogm_buff_len = bat_priv->bat_v.ogm_buff_len;
+	
 	/* tt changes have to be committed before the tvlv data is
 	 * appended as it may alter the tt tvlv container
 	 */
+	//confirmar todos los cambios tt locales pendientes que se han puesto
+	//en cola en el tiempo transcurrido desde la última confirmación 
 	batadv_tt_local_commit_changes(bat_priv);
+	//Agrega el contenido del contenedor tvlv a un buffer de paquetes OGM dado
 	tvlv_len = batadv_tvlv_container_ogm_append(bat_priv, &ogm_buff,
 						    &ogm_buff_len,
 						    BATADV_OGM2_HLEN);
@@ -222,36 +292,36 @@ static void batadv_v_ogm_send(struct work_struct *work)
 	bat_priv->bat_v.ogm_buff_len = ogm_buff_len;
 
 	skb = netdev_alloc_skb_ip_align(NULL, ETH_HLEN + ogm_buff_len);
+	//si es null se redirge al bloque reschedule
 	if (!skb)
 		goto reschedule;
 
-	/**
-	 *	skb_reserve - adjust headroom
-	 *	@skb: buffer to alter
-	 *	@len: bytes to move
-	 *
-	 *	Increase the headroom of an empty &sk_buff by reducing the tail
-	 *	room. This is only allowed for an empty buffer.
-	 */
+		//Incrementa el espacio libre de un &sk_buff vacio reduciendo el espacio
+	//de la cola. Solo es permitido para un buffer vacio
 	skb_reserve(skb, ETH_HLEN);
-	/**
-	 *	skb_put - add data to a buffer
-	 *	@skb: buffer to use
-	 *	@ogm_buff_len: amount of data to add
-	 *
-	 *	This function extends the used data area of the buffer. If this would
-	 *	exceed the total buffer size the kernel will panic. A pointer to the
-	 *	first byte of the extra data is returned.
-	 */
+	
+	//Agrega informacion al buffer. Si excede el total del tamaño del buffer
+	//el kernel entra en problemas. Un puntero al primer byte de la informacion extra
+	//es devuelto 
 	pkt_buff = skb_put(skb, ogm_buff_len);
+	//copia un bloque de memoria
+	//destination: skb_buff
+	//source: ogm_received
+	//size_t: packet_len
 	memcpy(pkt_buff, ogm_buff, ogm_buff_len);
 
+	//Guarda en una variable un paquete OGM del buffer
 	ogm_packet = (struct batadv_ogm2_packet *)skb->data;
+	//Guarda en una variable eñ numero de secuencia 
+	//existe una conversion explicita de tipos
 	ogm_packet->seqno = htonl(atomic_read(&bat_priv->bat_v.ogm_seqno));
+	//incrementa el numero de secuencia
 	atomic_inc(&bat_priv->bat_v.ogm_seqno);
+    //Asignacion de tvlv_leng al paqiete. Hay conversion(htons)
 	ogm_packet->tvlv_len = htons(tvlv_len);
 
 	/* broadcast on every interface */
+	//Sentencia para manejar concurrencia
 	rcu_read_lock();
 
 	/**
@@ -262,6 +332,7 @@ static void batadv_v_ogm_send(struct work_struct *work)
 	 * the _rcu list-mutation primitives such as list_add_rcu()
 	 * as long as the traversal is guarded by rcu_read_lock().
 	 */
+	//Macro para iterar sobre la lista rcu. Se ejecuta concurrentemente
 	list_for_each_entry_rcu(hard_iface, &batadv_hardif_list, list) {
 		if (hard_iface->soft_iface != bat_priv->soft_iface)
 			continue;
@@ -272,23 +343,22 @@ static void batadv_v_ogm_send(struct work_struct *work)
 		 *
 		 * Return non-zero if the increment succeeded. Otherwise return 0.
 		 */
+		//Incrementa refcount al objeto a menos que sea cero-
 		if (!kref_get_unless_zero(&hard_iface->refcount))
+			//Fuerza a que comience una nueva vuelta dentro del ciclo
 			continue;
 
-		/**
-		 * batadv_hardif_no_broadcast - check whether (re)broadcast is necessary
-		 * @if_outgoing: the outgoing interface checked and considered for (re)broadcast
-		 *  (NULL if we originated)
-		 *
-		 * Checks whether a packet needs to be (re)broadcasted on the given interface.
-		 *
-		 * Return:
-		 *	BATADV_HARDIF_BCAST_NORECIPIENT: No neighbor on interface
-		 *	BATADV_HARDIF_BCAST_DUPFWD: Just one neighbor, but it is the forwarder
-		 *	BATADV_HARDIF_BCAST_DUPORIG: Just one neighbor, but it is the originator
-		 *	BATADV_HARDIF_BCAST_OK: Several neighbors, must broadcast
-		 */
+		 
+		//Verifica si el paquete necesita (re)broadcast sobre la interfaz entregada
+		//Retorna los siguientes posibles valores:
+		//	BATADV_HARDIF_BCAST_NORECIPIENT: No neighbor on interface
+	    //	BATADV_HARDIF_BCAST_DUPFWD: Just one neighbor, but it is the forwarder
+		//	BATADV_HARDIF_BCAST_DUPORIG: Just one neighbor, but it is the originator
+		//	BATADV_HARDIF_BCAST_OK: Several neighbors, must broadcast
+		 
 		ret = batadv_hardif_no_broadcast(hard_iface, NULL, NULL);
+		//Analiza la salida de batadv_hardif_no_broadcast almacenada en ret y
+		//actualiza el type
 		if (ret) {
 			char *type;
 
@@ -305,20 +375,17 @@ static void batadv_v_ogm_send(struct work_struct *work)
 			default:
 				type = "unknown";
 			}
-			//CONFIG_BATMAN_ADV_DEBUG
+			//Agrega log 
 			batadv_dbg(BATADV_DBG_BATMAN, bat_priv, "OGM2 from ourselve on %s surpressed: %s\n",
 				   hard_iface->net_dev->name, type);
 
-			/**
-			 * batadv_hardif_put - decrement the hard interface refcounter and possibly
-			 *  release it
-			 * @hard_iface: the hard interface to free
-			 */
+
+			//reduce el refcounter de hard_iface y posiblemente lo libera
 			batadv_hardif_put(hard_iface);
 			continue;
 		}
 
-		//CONFIG_BATMAN_ADV_DEBUG
+		//Agrega log de envio de paquete OGM con su informacion
 		batadv_dbg(BATADV_DBG_BATMAN, bat_priv,
 			   "Sending own OGM2 packet (originator %pM, seqno %u, throughput %u, TTL %d) on interface %s [%pM]\n",
 			   ogm_packet->orig, ntohl(ogm_packet->seqno),
@@ -327,37 +394,27 @@ static void batadv_v_ogm_send(struct work_struct *work)
 			   hard_iface->net_dev->dev_addr);
 
 		/* this skb gets consumed by batadv_v_ogm_send_to_if() */
+		//se duplica el buffer. El nuevo buffer tiene su refcount en 1
 		skb_tmp = skb_clone(skb, GFP_ATOMIC);
+		//Chequea que no haya fallado la clonacion(distinto de null)
 		if (!skb_tmp) {
-			/**
-			 * batadv_hardif_put - decrement the hard interface refcounter and possibly
-			 *  release it
-			 * @hard_iface: the hard interface to free
-			 */
+
+			//si falla decrementa el refcounter de hard_iface y posiblemente lo libera 
 			batadv_hardif_put(hard_iface);
 			break;
 		}
 
-		/**
-		 * batadv_v_ogm_send_to_if - send a batman ogm using a given interface
-		 * @skb: the OGM to send
-		 * @hard_iface: the interface to use to send the OGM
-		 */
+		//Envia un paquete OGM batman(skb_temp) usando la interfaz pasada por paramentro(hard_iface)
 		batadv_v_ogm_send_to_if(skb_tmp, hard_iface);
-		/**
-		 * batadv_hardif_put - decrement the hard interface refcounter and possibly
-		 *  release it
-		 * @hard_iface: the hard interface to free
-		 */
+
+		//decrementa el refcounter de hard_iface y posiblemente lo libera 
 		batadv_hardif_put(hard_iface);
 	}
 	//rcu_read_unlock() - marks the end of an RCU read-side critical section.
+	//termina la concurrencia
 	rcu_read_unlock();
 
 	/**
-	 *	consume_skb - free an skbuff
-	 *	@skb: buffer to free
-	 *
 	 *	Drop a ref to the buffer and free it if the usage count has hit zero
 	 *	Functions identically to kfree_skb, but kfree_skb assumes that the frame
 	 *	is being dropped after a failure and notes that
@@ -369,6 +426,7 @@ reschedule:
 	 * batadv_v_ogm_start_timer - restart the OGM sending timer
 	 * @bat_priv: the bat priv with all the soft interface information
 	 */
+	//reinicia el timer de envio de pauetes OGM de la itnerfaz
 	batadv_v_ogm_start_timer(bat_priv);
 out:
 	return;
@@ -382,20 +440,33 @@ out:
  *
  * Return: 0 on success or a negative error code otherwise
  */
+
+//A partir de una interfaz pasada por parametro se prepara o inicializa valores
+//para su posterior uso
+//Luego de obtener la informacion de la interfaz, se actualiza el timer de envio
+//OGM de la interfaz con valores iniciales usando la funcion batadv_v_ogm_start_timer
+//se retorna 0 o el numero de error(negativo) en otro caso
+
+//Es invocada en
+//bat_v.c: batadv_v_iface_enable
+// Este metodo habilita tanto la interfaz para el envio de paquetes OGM como asi tambien
+//para paquetes ELP.
+
+//Las secuencias de llamado a batadv_v_ogm_iface_enable son las siguientes 
+//batadv_v_iface_enable----->batadv_v_ogm_iface_enable
+
+//batadv_v_ogm_iface_enable se publica en bat_v_ogm.h
 int batadv_v_ogm_iface_enable(struct batadv_hard_iface *hard_iface)
 {
-	/**
-	 *	netdev_priv - access network device private data
-	 *	@dev: network device
-	 *
-	 * Get network device private data
-	 */
+
+	//Obtiene la informacion privada del dispositivo de red
 	struct batadv_priv *bat_priv = netdev_priv(hard_iface->soft_iface);
 
 	/**
 	 * batadv_v_ogm_start_timer - restart the OGM sending timer
 	 * @bat_priv: the bat priv with all the soft interface information
 	 */
+	//reinicia el timer de envio OGM 
 	batadv_v_ogm_start_timer(bat_priv);
 
 	return 0;
@@ -405,28 +476,37 @@ int batadv_v_ogm_iface_enable(struct batadv_hard_iface *hard_iface)
  * batadv_v_ogm_primary_iface_set - set a new primary interface
  * @primary_iface: the new primary interface
  */
+//Setea una interfaz primaria. Antes chequea que haya paquetes en el buffer sino 
+//termina la ejecucion de la funcion.
+//si hay paquetes copia la direccion ethernet de la interfaz al paquete 
+
+//Es invocada en
+//bat_v.c: batadv_v_ogm_metric_update
+//batadv_v_primary_iface_set setea una interfaz primeria para paquetes ogm y elp.
+//para los primeros llama a batadv_v_ogm_primary_iface_set pasandole la interfaz
+//por parametro
+
+//Las secuencias de llamado a batadv_v_ogm_primary_iface_set son las siguientes 
+//batadv_v_primary_iface_set----->batadv_v_ogm_primary_iface_set
+
+//batadv_v_ogm_primary_iface_set se publica en bat_v_ogm.h
 void batadv_v_ogm_primary_iface_set(struct batadv_hard_iface *primary_iface)
 {
-	/**
-	 *	netdev_priv - access network device private data
-	 *	@dev: network device
-	 *
-	 * Get network device private data
-	 */
+
+	//Obtiene la informacion privada del dispositivo de red
 	struct batadv_priv *bat_priv = netdev_priv(primary_iface->soft_iface);
+	//crea struct de paquete OGM
 	struct batadv_ogm2_packet *ogm_packet;
 
+	//si no hay paquetes termina la ejecucion de la funcion
 	if (!bat_priv->bat_v.ogm_buff)
 		return;
 
+	//se obtiene el paquete OGM del buffer
 	ogm_packet = (struct batadv_ogm2_packet *)bat_priv->bat_v.ogm_buff;
-	/**
-	 * ether_addr_copy - Copy an Ethernet address
-	 * @dst: Pointer to a six-byte array Ethernet address destination
-	 * @src: Pointer to a six-byte array Ethernet address source
-	 *
-	 * Please note: dst & src must both be aligned to u16.
-	 */
+	
+	//Copia la direccion ethernet de primary_iface->net_dev->dev_addr a
+	//ogm_packet->orig 
 	ether_addr_copy(ogm_packet->orig, primary_iface->net_dev->dev_addr);
 }
 
@@ -451,11 +531,27 @@ void batadv_v_ogm_primary_iface_set(struct batadv_hard_iface *primary_iface)
  *
  * Return: the penalised throughput metric.
  */
+
+//Recibiendo por parametro la interfaz entrante y saliente y el rendimiento
+//actualiza este valor de acuerdo a las caracteristicas descriptas en la cabecera
+//de la funcion
+
+//Es invocada en
+//bat_v_ogm.c: batadv_v_ogm_metric_update
+//batadv_v_ogm_metric_update verifica que el paquete recibido por parametro no haya sido ya actualizado
+//comparando los seqno.
+//Actualiza los valores de seqno y ultima vez de las interfaces
+//Luego actualiza los nuevos valores de metricas de acuerdo a diferentes condiciones
+//llamando al metodo batadv_v_forward_penalty 
+
+//Las secuencias de llamado a batadv_v_ogm_metric_update son las siguientes 
+//batadv_v_ogm_metric_update----->batadv_v_forward_penalty
 static u32 batadv_v_forward_penalty(struct batadv_priv *bat_priv,
 				    struct batadv_hard_iface *if_incoming,
 				    struct batadv_hard_iface *if_outgoing,
 				    u32 throughput)
 {
+	//inicializacion de variables
 	int hop_penalty = atomic_read(&bat_priv->hop_penalty);
 	int hop_penalty_max = BATADV_TQ_MAX_VALUE;
 
@@ -489,6 +585,24 @@ static u32 batadv_v_forward_penalty(struct batadv_priv *bat_priv,
  * Forward an OGM to an interface after having altered the throughput metric and
  * the TTL value contained in it. The original OGM isn't modified.
  */
+
+//El primer chequeo que se realiza es que no se reenvie por default
+//Chequea que no se envie dos veces el mismo paquete usando el numero de secuencia
+//Se controla que el paquete no tenga que ser descartado por el time to live agotado
+//Si no sucede lo anterior se reduce el ttl en 1, se agrega penalidad por reenvio 
+//y se reenvia por la interfaz saliente pasada por parametro 
+
+//Es invocada en
+//bat_v_ogm.c: batadv_v_ogm_process_per_outif
+//batadv_v_ogm_process_per_outif recibe como parametro la informacion de la interfaz, el header ethernet, 
+// OGM2, el nodo Originator y el vecino, las interfaces salientes y entrantes
+//batadv_v_ogm_process_per_outif actualiza las metricas de rendimiento y reenvia el paquete. Para actualizar
+//las rutas y saber si debe ser reenviado el paquete se llama al metodo batadv_v_ogm_route_update. El reenvio
+//del paquete se hace efectivo llamando a este metodo batadv_v_ogm_forward
+
+//Las secuencias de llamado a batadv_v_ogm_forward son las siguientes 
+//batadv_v_ogm_process_per_outif----->batadv_v_ogm_forward
+
 static void batadv_v_ogm_forward(struct batadv_priv *bat_priv,
 				 const struct batadv_ogm2_packet *ogm_received,
 				 struct batadv_orig_node *orig_node,
@@ -496,24 +610,38 @@ static void batadv_v_ogm_forward(struct batadv_priv *bat_priv,
 				 struct batadv_hard_iface *if_incoming,
 				 struct batadv_hard_iface *if_outgoing)
 {
+	//declaracion de struct con la información vecina por interfaz saliente
 	struct batadv_neigh_ifinfo *neigh_ifinfo = NULL;
+	//declaracion de struct con la información del originador por interfaz saliente
 	struct batadv_orig_ifinfo *orig_ifinfo = NULL;
+	//estructura para vecinos de saltos individuales
 	struct batadv_neigh_node *router = NULL;
+	//paquete OGM a ser reenviado
 	struct batadv_ogm2_packet *ogm_forward;
 	unsigned char *skb_buff;
+	//socket buffer
 	struct sk_buff *skb;
 	size_t packet_len;
 	u16 tvlv_len;
 
 	/* only forward for specific interfaces, not for the default one. */
+	//si es por default se redirige a out
 	if (if_outgoing == BATADV_IF_DEFAULT)
 		goto out;
 
+
+	//busca y posiblemente crea un objeto orig_ifinfo a partir del nodo origen a ser consultado
+	//y la interfaz por la que deberia ser enviado
+	//retorna null si falla o el objeto orig_ifinfo para la interfaz saliente. El objeto es creado
+	//y agregado a la lista si no existe
+	//el objeto se retorna con el refcounter aumentado en 1
 	orig_ifinfo = batadv_orig_ifinfo_new(orig_node, if_outgoing);
+	//verifica que no hubo fallas en la asignacion anterior. Si hubo se redirige al bloque out
 	if (!orig_ifinfo)
 		goto out;
 
 	/* acquire possibly updated router */
+	//rutea al creador dependiendo de iface
 	router = batadv_orig_router_get(orig_node, if_outgoing);
 
 	/* strict rule: forward packets coming from the best next hop only */
@@ -524,94 +652,76 @@ static void batadv_v_ogm_forward(struct batadv_priv *bat_priv,
 	if (orig_ifinfo->last_seqno_forwarded == ntohl(ogm_received->seqno))
 		goto out;
 
+	//actualiza el valor de numero de secuencia reenviado
 	orig_ifinfo->last_seqno_forwarded = ntohl(ogm_received->seqno);
 
+	//se agrega log si el ttl es excedido
 	if (ogm_received->ttl <= 1) {
 		batadv_dbg(BATADV_DBG_BATMAN, bat_priv, "ttl exceeded\n");
 		goto out;
 	}
 
-	/**
-	 * batadv_neigh_ifinfo_get - find the ifinfo from an neigh_node
-	 * @neigh: the neigh node to be queried
-	 * @if_outgoing: the interface for which the ifinfo should be acquired
-	 *
-	 * The object is returned with refcounter increased by 1.
-	 *
-	 * Return: the requested neigh_ifinfo or NULL if not found
-	 */
+
+	//encuentra la interfaz a partir de una nodo vecino
+	//el objeto se devuelve con el refcounter incrementado en 1
+	//retorna null si no lo encontro
 	neigh_ifinfo = batadv_neigh_ifinfo_get(neigh_node, if_outgoing);
+	//si no se encontro se redirige al bloque out
 	if (!neigh_ifinfo)
 		goto out;
 
+	//converts unsigned short integer netshort from network byte order to host byte 
 	tvlv_len = ntohs(ogm_received->tvlv_len);
 
+	//actualizacion del tamaño del paquete
 	packet_len = BATADV_OGM2_HLEN + tvlv_len;
 	skb = netdev_alloc_skb_ip_align(if_outgoing->net_dev,
 					ETH_HLEN + packet_len);
 	if (!skb)
 		goto out;
 
-	/**
-	 *	skb_reserve - adjust headroom
-	 *	@skb: buffer to alter
-	 *	@len: bytes to move
-	 *
-	 *	Increase the headroom of an empty &sk_buff by reducing the tail
-	 *	room. This is only allowed for an empty buffer.
-	 */
+
+	//Incrementa el espacio libre de un &sk_buff vacio reduciendo el espacio
+	//de la cola. Solo es permitido para un buffer vacio
 	skb_reserve(skb, ETH_HLEN);
-	/**
-	 *	skb_put - add data to a buffer
-	 *	@skb: buffer to use
-	 *	@len: amount of data to add
-	 *
-	 *	This function extends the used data area of the buffer. If this would
-	 *	exceed the total buffer size the kernel will panic. A pointer to the
-	 *	first byte of the extra data is returned.
-	 */
+ 
+	//Agrega informacion al buffer. Si excede el total del tamaño del buffer
+	//el kernel entra en problemas. Un puntero al primer byte de la informacion extra
+	//es devuelto 
 	skb_buff = skb_put(skb, packet_len);
+	//copia un bloque de memoria
+	//destination: skb_buff
+	//source: ogm_received
+	//size_t: packet_len
 	memcpy(skb_buff, ogm_received, packet_len);
 
 	/* apply forward penalty */
 	ogm_forward = (struct batadv_ogm2_packet *)skb_buff;
+	//conversion de tipos
 	ogm_forward->throughput = htonl(neigh_ifinfo->bat_v.throughput);
+	//reduccion de ttl
 	ogm_forward->ttl--;
 
-	//add log
+	//add log de reenvio de paquete OGM
 	batadv_dbg(BATADV_DBG_BATMAN, bat_priv,
 		   "Forwarding OGM2 packet on %s: throughput %u, ttl %u, received via %s\n",
 		   if_outgoing->net_dev->name, ntohl(ogm_forward->throughput),
 		   ogm_forward->ttl, if_incoming->net_dev->name);
 
-	/**
-	 * batadv_v_ogm_send_to_if - send a batman ogm using a given interface
-	 * @skb: the OGM to send
-	 * @hard_iface: the interface to use to send the OGM
-	 */
+
+	//envio un paquete ogm usando la interfaz pasada por parametro
 	batadv_v_ogm_send_to_if(skb, if_outgoing);
 
 out:
+	//verifica por que condicion entra al bloque
 	if (orig_ifinfo)
-		/**
-		 * batadv_orig_ifinfo_put - decrement the refcounter and possibly release
-		 *  the orig_ifinfo
-		 * @orig_ifinfo: the orig_ifinfo object to release
-		 */
+		//decrementa el refcounter de org_ifinfo y posiblemente lo libera
 		batadv_orig_ifinfo_put(orig_ifinfo);
 	if (router)
-		/**
-		 * batadv_neigh_node_put, - decrement the neighbors refcounter and possibly
-		 *  release it
-		 * @neigh_node: neigh neighbor to free
-		 */
+		//decrementa el refcounter de router y posiblemente lo libera
 		batadv_neigh_node_put(router);
 	if (neigh_ifinfo)
-		/**
-		 * batadv_neigh_ifinfo_put - decrement the refcounter and possibly release
-		 *  the neigh_ifinfo
-		 * @neigh_ifinfo: the neigh_ifinfo object to release
-		 */
+		//decrementa el refcounter de neigh_ifinfo y posiblemente lo libera
 		batadv_neigh_ifinfo_put(neigh_ifinfo);
 }
 
@@ -629,6 +739,25 @@ out:
  *  0  if it is not new but valid,
  *  <0 on error (e.g. old OGM)
  */
+//Verifica que el paquete recibido por parametro no haya sido ya actualizado
+//comparando los seqno.
+//Actualiza los valores de seqno y ultima vez de las interfaces
+//Luego actualiza los nuevos valores de metricas de acuerdo a diferentes condiciones
+//llamando al metodo batadv_v_forward_penalty 
+//Se retorna 1 si el paquete OGM es nuevo, 0 si es valido pero no es nuevo 
+//y menor a 0 si es error
+
+//Es invocada en
+//bat_v_ogm.c: batadv_v_ogm_process_per_outif
+//batadv_v_ogm_process_per_outif recibe como parametro la informacion de la interfaz, el header ethernet, 
+// OGM2, el nodo Originator y el vecino, las interfaces salientes y entrantes
+//batadv_v_ogm_process_per_outif actualiza las metricas de rendimiento y reenvia el paquete. Para actualizar
+//las rutas previamente necesita actualizar las metricas de rendimiento por lo que llama a batadv_v_ogm_metric_update.
+// A partir de esto, actualiza las rutas y reenvia el paquete si debe hacerlo. 
+
+//Las secuencias de llamado a batadv_v_ogm_forward son las siguientes 
+//batadv_v_ogm_process_per_outif----->batadv_v_ogm_metric_update
+
 static int batadv_v_ogm_metric_update(struct batadv_priv *bat_priv,
 				      const struct batadv_ogm2_packet *ogm2,
 				      struct batadv_orig_node *orig_node,
@@ -636,102 +765,78 @@ static int batadv_v_ogm_metric_update(struct batadv_priv *bat_priv,
 				      struct batadv_hard_iface *if_incoming,
 				      struct batadv_hard_iface *if_outgoing)
 {
+	//declaracion de struct para la info del originador por interfaz saliente
 	struct batadv_orig_ifinfo *orig_ifinfo;
+	//declaracion de struct para la info del vecino por interfaz saliente
 	struct batadv_neigh_ifinfo *neigh_ifinfo = NULL;
 	bool protection_started = false;
 	int ret = -EINVAL;
 	u32 path_throughput;
 	s32 seq_diff;
 
-	/*
-	 * batadv_orig_ifinfo_new - search and possibly create an orig_ifinfo object
-	 * @orig_node: the orig node to be queried
-	 * @if_outgoing: the interface for which the ifinfo should be acquired
-	 *
-	 * Return: NULL in case of failure or the orig_ifinfo object for the if_outgoing
-	 * interface otherwise. The object is created and added to the list
-	 * if it does not exist.
-	 *
-	 * The object is returned with refcounter increased by 1.
-	 */
+
+	//busca y posiblemente crea un objeto orig_ifinfo a partir del nodo origen a ser consultado
+	//y la interfaz por la que deberia ser enviado
+	//retorna null si falla o el objeto orig_ifinfo para la interfaz saliente. El objeto es creado
+	//y agregado a la lista si no existe
+	//el objeto se retorna con el refcounter aumentado en 1
 	orig_ifinfo = batadv_orig_ifinfo_new(orig_node, if_outgoing);
+	//si se retorno null en la funcion anterior se dirige a out
 	if (!orig_ifinfo)
 		goto out;
 
+	//diferencia entre el numero de secuencia del paquete ogm2 y el ultimo de la interfaz
 	seq_diff = ntohl(ogm2->seqno) - orig_ifinfo->last_real_seqno;
 
 
-	/**
-	 * batadv_window_protected - checks whether the host restarted and is in the
-	 *  protection time.
-	 * @bat_priv: the bat priv with all the soft interface information
-	 * @seq_num_diff: difference between the current/received sequence number and
-	 *  the last sequence number
-	 * @seq_old_max_diff: maximum age of sequence number not considered as restart
-	 * @last_reset: jiffies timestamp of the last reset, will be updated when reset
-	 *  is detected
-	 * @protection_started: is set to true if the protection window was started,
-	 *   doesn't change otherwise.
-	 *
-	 * Return:
-	 *  false if the packet is to be accepted.
-	 *  true if the packet is to be ignored.
-	 */
+	//cheqyea que haya vecinos(hlist_empty)
+	//ademas verifica si el host se reinicio y esta entre la ventana de tiempo de proteccion
+	//retorna true si debe ser ignorado o false si debe ser aceptado.
+	//Para ello necesita la informacion de la interfaz, la dif entre el numero de secuencia del
+	//paquete actual y el ultimo recibido, el valor maximo a considerar como no reseado 
 	if (!hlist_empty(&orig_node->neigh_list) &&
 	    batadv_window_protected(bat_priv, seq_diff,
 				    BATADV_OGM_MAX_AGE,
 				    &orig_ifinfo->batman_seqno_reset,
 				    &protection_started)) {
+		//se agrega log con los datos del paquete a ignorar
 		batadv_dbg(BATADV_DBG_BATMAN, bat_priv,
 			   "Drop packet: packet within window protection time from %pM\n",
 			   ogm2->orig);
 		batadv_dbg(BATADV_DBG_BATMAN, bat_priv,
 			   "Last reset: %ld, %ld\n",
 			   orig_ifinfo->batman_seqno_reset, jiffies);
+		//se redirige a out
 		goto out;
 	}
 
-	/* drop packets with old seqnos, however accept the first packet after
-	 * a host has been rebooted.
-	 */
+	//descarta paquetes con numero de secuencias "viejos", sin embargo acepta
+	//el primer paquete despues de que un host haya sido rebooteado
 	if ((seq_diff < 0) && !protection_started)
 		goto out;
 
+	//se actualizan valores de ultima vez en nodo vecino y origen y en la interfaz
 	neigh_node->last_seen = jiffies;
-
 	orig_node->last_seen = jiffies;
-
 	orig_ifinfo->last_real_seqno = ntohl(ogm2->seqno);
 	orig_ifinfo->last_ttl = ogm2->ttl;
 
 
-	/**
-	 * batadv_neigh_ifinfo_new - search and possibly create an neigh_ifinfo object
-	 * @neigh: the neigh node to be queried
-	 * @if_outgoing: the interface for which the ifinfo should be acquired
-	 *
-	 * Return: NULL in case of failure or the neigh_ifinfo object for the
-	 * if_outgoing interface otherwise. The object is created and added to the list
-	 * if it does not exist.
-	 *
-	 * The object is returned with refcounter increased by 1.
-	 */
+	//busca y posiblemente crea un objeto neigh_ifinfo a partir del nodo origen a ser consultado
+	//y la interfaz por la que deberia ser enviado
+	//retorna null si falla o el objeto neigh_ifinfo para la interfaz saliente. El objeto es creado
+	//y agregado a la lista si no existe
+	//el objeto se retorna con el refcounter aumentado en 1
 	neigh_ifinfo = batadv_neigh_ifinfo_new(neigh_node, if_outgoing);
 	if (!neigh_ifinfo)
 		goto out;
 
-	/**
-	 * batadv_v_forward_penalty - apply a penalty to the throughput metric forwarded
-	 *  with B.A.T.M.A.N. V OGMs
-	 * @bat_priv: the bat priv with all the soft interface information
-	 * @if_incoming: the interface where the OGM has been received
-	 * @if_outgoing: the interface where the OGM has to be forwarded to
-	 * @throughput: the current throughput
-	 *
-	 * Apply a penalty on the current throughput metric value based on the
-	 * characteristic of the interface where the OGM has been received. The return
-	 * value is computed as follows:
-	 * - throughput * 50%          if the incoming and outgoing interface are the
+
+	//aplica una penalidad al la metrica de rendimiento de reenvio con paquetes 
+	//OGM BATMAN V basado en las caracteristicas de la interfaz donde el paquete OGM 
+	//fue recibido. Seguidamente se muestran los calculos dependiendo las interfaces 
+	//salientes y entrantes
+	/*	 * - throughput * 50%      if the incoming and outgoing interface are the
 	 *                             same WiFi interface and the throughput is above
 	 *                             1MBit/s
 	 * - throughput                if the outgoing interface is the default
@@ -739,33 +844,32 @@ static int batadv_v_ogm_metric_update(struct batadv_priv *bat_priv,
 	 *                             internal table and not forwarded)
 	 * - throughput * hop penalty  otherwise
 	 *
-	 * Return: the penalised throughput metric.
-	 */
+	 * 
+	*/
+	//Devuelve la metrica de penalidad
 	path_throughput = batadv_v_forward_penalty(bat_priv, if_incoming,
 						   if_outgoing,
 						   ntohl(ogm2->throughput));
+	//actualiza el rendimiento de la interfaz vecina
 	neigh_ifinfo->bat_v.throughput = path_throughput;
+	//actualiza el numero de secuencia en la interfaz vecina
 	neigh_ifinfo->bat_v.last_seqno = ntohl(ogm2->seqno);
+	//actualizacion del ultimo ttl
 	neigh_ifinfo->last_ttl = ogm2->ttl;
 
 	if (seq_diff > 0 || protection_started)
+		//se marca que el paquete es nuevo
 		ret = 1;
 	else
+		//el paquete no es nuevo pero valido
 		ret = 0;
 out:
+	//se chequea por que condicion se entra a la unidad out
 	if (orig_ifinfo)
-		/**
-		 * batadv_orig_ifinfo_put - decrement the refcounter and possibly release
-		 *  the orig_ifinfo
-		 * @orig_ifinfo: the orig_ifinfo object to release
-		 */
+		//decrementa el refcounter de org_ifinfo y posiblemente lo libera
 		batadv_orig_ifinfo_put(orig_ifinfo);
 	if (neigh_ifinfo)
-		/**
-		 * batadv_neigh_ifinfo_put - decrement the refcounter and possibly release
-		 *  the neigh_ifinfo
-		 * @neigh_ifinfo: the neigh_ifinfo object to release
-		 */
+		//decrementa el refcounter de neigh_ifinfo y posiblemente lo libera
 		batadv_neigh_ifinfo_put(neigh_ifinfo);
 
 	return ret;
@@ -783,6 +887,24 @@ out:
  *
  * Return: true if the packet should be forwarded, false otherwise
  */
+//Recibe como parametro la interfaz con toda la informacion, el paquete OGM
+//junto con el header, el nodo origen y el vecino, y la interfaz saliente y entrante
+//Actualiza las rutas basadandose en el OGM recibido por parametro
+//el paquete se descarta si no fue enviado por un vecino directo o si no mejora el
+//rendimiento
+//Si no se descarta se actualizan las rutas y se marca para reenviar
+//Se retorna true o false de acuerdo a si debe reenviarse o no
+
+//Es invocada en
+//bat_v_ogm.c: batadv_v_ogm_process_per_outif
+//batadv_v_ogm_process_per_outif recibe como parametro la informacion de la interfaz, el header ethernet, 
+// OGM2, el nodo Originator y el vecino, las interfaces salientes y entrantes
+//batadv_v_ogm_process_per_outif actualiza las metricas de rendimiento y reenvia el paquete. Para actualizar
+//las rutas y saber si debe ser reenviado el paquete se llama al metodo batadv_v_ogm_route_update
+
+//Las secuencias de llamado a batadv_v_ogm_route_update son las siguientes 
+//batadv_v_ogm_process_per_outif----->batadv_v_ogm_route_update
+
 static bool batadv_v_ogm_route_update(struct batadv_priv *bat_priv,
 				      const struct ethhdr *ethhdr,
 				      const struct batadv_ogm2_packet *ogm2,
@@ -801,20 +923,16 @@ static bool batadv_v_ogm_route_update(struct batadv_priv *bat_priv,
 	s32 neigh_seq_diff;
 	bool forward = false;
 
-	/*
-	**
-	 * batadv_v_ogm_orig_get - retrieve and possibly create an originator node
-	 * @bat_priv: the bat priv with all the soft interface information
-	 * @addr: the address of the originator
-	 *
-	 * Return: the orig_node corresponding to the specified address. If such object
-	 * does not exist it is allocated here. In case of allocation failure returns
-	 * NULL.
-	 */
+	//se obtiene(o crea) un nodo originador a partir de la interfaz y la direccion mac
+    //si no existe lo crea aca. Si falla retorna null
 	orig_neigh_node = batadv_v_ogm_orig_get(bat_priv, ethhdr->h_source);
+	
+	//chequea que no haya errores al asignar
 	if (!orig_neigh_node)
 		goto out;
 
+	//si llega aca es porque no hubo errores en la asignacion
+	
 	/**
 	 * batadv_orig_router_get - router to the originator depending on iface
 	 * @orig_node: the orig node for the router
@@ -825,6 +943,8 @@ static bool batadv_v_ogm_route_update(struct batadv_priv *bat_priv,
 	 *
 	 * The object is returned with refcounter increased by 1.
 	 */
+	// se obtiene el vecino que deberia ser ruteado por este nodo originador e interfaz
+	//El objeto se retorna con el refcounter incrementado en 1
 	orig_neigh_router = batadv_orig_router_get(orig_neigh_node,
 						   if_outgoing);
 
@@ -833,22 +953,23 @@ static bool batadv_v_ogm_route_update(struct batadv_priv *bat_priv,
 	 */
 	router = batadv_orig_router_get(orig_node, if_outgoing);
 	if (router && router->orig_node != orig_node && !orig_neigh_router) {
+		//se agrega el log informando que el paquete no fue enviado por un vecino directo
 		batadv_dbg(BATADV_DBG_BATMAN, bat_priv,
 			   "Drop packet: OGM via unknown neighbor!\n");
 		goto out;
 	}
 
-	/* Mark the OGM to be considered for forwarding, and update routes
-	 * if needed.
-	 */
+
+	//Se marca el paquete OGM a ser considerado para reenviar y actualiza las rutas
+	//si es necesario
 	forward = true;
 
+	//se agrega log 
 	batadv_dbg(BATADV_DBG_BATMAN, bat_priv,
 		   "Searching and updating originator entry of received packet\n");
 
-	/* if this neighbor already is our next hop there is nothing
-	 * to change
-	 */
+
+	//Si ese vecino ya es el siguiente salto no hay nada que cambiar
 	if (router == neigh_node)
 		goto out;
 
@@ -857,16 +978,12 @@ static bool batadv_v_ogm_route_update(struct batadv_priv *bat_priv,
 	 * the last received seqno from our best next hop.
 	 */
 	if (router) {
-		/**
-		 * batadv_neigh_ifinfo_get - find the ifinfo from an neigh_node
-		 * @neigh: the neigh node to be queried
-		 * @if_outgoing: the interface for which the ifinfo should be acquired
-		 *
-		 * The object is returned with refcounter increased by 1.
-		 *
-		 * Return: the requested neigh_ifinfo or NULL if not found
-		 */
+		// encuentra la ifinfo de un nodo vecino a partir de el nodo a ser consultado(router)
+		// y la interfaz por la cual se debe adquirir ifinfo
 		router_ifinfo = batadv_neigh_ifinfo_get(router, if_outgoing);
+
+		// encuentra la ifinfo de un nodo vecino a partir de el nodo a ser consultado(neigh_node)
+		// y la interfaz por la cual se debe adquirir ifinfo	
 		neigh_ifinfo = batadv_neigh_ifinfo_get(neigh_node, if_outgoing);
 
 		/* if these are not allocated, something is wrong. */
@@ -879,6 +996,9 @@ static bool batadv_v_ogm_route_update(struct batadv_priv *bat_priv,
 		router_throughput = router_ifinfo->bat_v.throughput;
 		neigh_throughput = neigh_ifinfo->bat_v.throughput;
 
+		//se chequa que la distancia entre el numero de secuencia de 
+		//neigh_last_seqno y router_last_seqno no sea mayor a BATADV_OGM_MAX_ORIGDIFF(5) 
+		//si el throughput de router es mayor que el del vecino se redirige a out
 		if ((neigh_seq_diff < BATADV_OGM_MAX_ORIGDIFF) &&
 		    (router_throughput >= neigh_throughput))
 			goto out;
@@ -893,42 +1013,24 @@ static bool batadv_v_ogm_route_update(struct batadv_priv *bat_priv,
 	 */
 	batadv_update_route(bat_priv, orig_node, if_outgoing, neigh_node);
 out:
+	//chequa por que condicion entro
 	if (router)
-		/**
-		 * batadv_neigh_node_put - decrement the neighbors refcounter and possibly
-		 *  release it
-		 * @router: neigh neighbor to free
-		 */
+		//decrementa el refcounter de los vecinos de router y posiblemente los libera
 		batadv_neigh_node_put(router);
 	if (orig_neigh_router)
-		/**
-		 * batadv_neigh_node_put - decrement the neighbors refcounter and possibly
-		 *  release it
-		 * @orig_neigh_node: neigh neighbor to free
-		 */
+		//decrementa el refcounter de los vecinos de orig_neigh_router y posiblemente los libera
 		batadv_neigh_node_put(orig_neigh_router);
 	if (orig_neigh_node)
-		/**
-		 * batadv_orig_node_put - decrement the orig node refcounter and possibly
-		 *  release it
-		 * @orig_neigh_node: the orig node to free
-		 */
+		//decrementa el refcounter de los vecinos de orig_neigh_node y posiblemente los libera
 		batadv_orig_node_put(orig_neigh_node);
 	if (router_ifinfo)
-		/**
-		 * batadv_neigh_ifinfo_put - decrement the refcounter and possibly release
-		 *  the router_ifinfo 
-		 * @router_ifinfo: the router_ifinfo object to release
-		 */
+		//decrementa el refcounter del objeto router_ifinfo y posiblemente los libera
 		batadv_neigh_ifinfo_put(router_ifinfo);
 	if (neigh_ifinfo)
-		/**
-		 * batadv_neigh_ifinfo_put - decrement the refcounter and possibly release
-		 *  the neigh_ifinfo
-		 * @neigh_ifinfo: the neigh_ifinfo object to release
-		 */
+		//decrementa el refcounter del objeto router_ifinfo y posiblemente los libera
 		batadv_neigh_ifinfo_put(neigh_ifinfo);
 
+	//return true o false dependiendo si fue reenviado o no
 	return forward;
 }
 
@@ -942,6 +1044,19 @@ out:
  * @if_incoming: the interface where this packet was received
  * @if_outgoing: the interface for which the packet should be considered
  */
+//batadv_v_ogm_process_per_outif recibe como parametro la informacion de la interfaz, el header ethernet, 
+// OGM2, el nodo Originator y el vecino, las interfaces salientes y entrantes
+//batadv_v_ogm_process_per_outif actualiza las metricas de rendimiento y reenvia el paquete
+
+//Es invocada en
+//bat_v_ogm.c: batadv_v_ogm_process
+//batadv_v_ogm_process es invocada para procesar un paquete OGM.
+//Si el paquete no es decartado, se debe actualizar las metricas de rendimiento y procesarlo 
+//por una interfaz saliente, para ello se invoca esta funcion(batadv_v_ogm_process_per_outif)
+
+//Las secuencias de llamado a batadv_v_ogm_process_per_outif son las siguientes 
+//batadv_v_ogm_process----->batadv_v_ogm_process_per_outif
+
 static void
 batadv_v_ogm_process_per_outif(struct batadv_priv *bat_priv,
 			       const struct ethhdr *ethhdr,
@@ -959,12 +1074,26 @@ batadv_v_ogm_process_per_outif(struct batadv_priv *bat_priv,
 					       neigh_node, if_incoming,
 					       if_outgoing);
 
-	/* outdated sequence numbers are to be discarded */
+	//los números de secuencia obsoletos deben descartarse
 	if (seqno_age < 0)
 		return;
 
 	/* only unknown & newer OGMs contain TVLVs we are interested in */
 	if ((seqno_age > 0) && (if_outgoing == BATADV_IF_DEFAULT))
+		/**
+		 * batadv_tvlv_containers_process - parse the given tvlv buffer to call the
+		 *  appropriate handlers
+		 * @bat_priv: the bat priv with all the soft interface information
+		 * @ogm_source: flag indicating whether the tvlv is an ogm or a unicast packet
+		 * @orig_node: orig node emitting the ogm packet
+		 * @src: source mac address of the unicast packet
+		 * @dst: destination mac address of the unicast packet
+		 * @tvlv_value: tvlv content
+		 * @tvlv_value_len: tvlv content length
+		 *
+		 * Return: success when processing an OGM or the return value of all called
+		 * handler callbacks.
+		 */
 		batadv_tvlv_containers_process(bat_priv, true, orig_node,
 					       NULL, NULL,
 					       (unsigned char *)(ogm2 + 1),
@@ -1001,6 +1130,8 @@ batadv_v_ogm_process_per_outif(struct batadv_priv *bat_priv,
 
 //Las secuencias de llamado a batadv_v_ogm_aggr_packet son las siguientes 
 //batadv_v_ogm_packet_recv----->batadv_v_ogm_aggr_packet
+
+//batadv_v_ogm_aggr_packet se publica en bat_v_ogm.h
 static bool batadv_v_ogm_aggr_packet(int buff_pos, int packet_len,
 				     __be16 tvlv_len)
 {
@@ -1033,6 +1164,10 @@ static bool batadv_v_ogm_aggr_packet(int buff_pos, int packet_len,
 
 //Es invocada en
 //bat_v_ogm.c: batadv_v_ogm_packet_recv
+// batadv_v_ogm_packet_recv se encarga de manenar los paquetes OGM recibidos a partir de una interfaz y 
+// un paquete OGM pasada por parametro.
+// Si no existe algun error o la mac origen del paquete no pertenece a la mesh se procesa 
+// llamando al metodo batadv_v_ogm_process
 // batadv_v_ogm_packet_recv utiliza a batadv_v_ogm_process por cada paquete OGM que esta en el buffer. 
 
 //Las secuencias de llamado a batadv_v_ogm_process son las siguientes 
@@ -1391,7 +1526,6 @@ free_skb:
 // donde se inicializan todos los recursos privados para una mesh y para ello se utiliza 
  // batadv_v_ogm_init
 
-
 //Las secuencias de llamado a batadv_v_ogm_init son las siguientes 
 //batadv_v_mesh_init----->batadv_v_ogm_init
 
@@ -1443,7 +1577,6 @@ int batadv_v_ogm_init(struct batadv_priv *bat_priv)
 // OGM
 //Esta funcion (batadv_v_ogm_free) recibe una interfaz, y se encarga de liberar la memoria del buffer OGM
 //y setear los valores iniciales
-//Si puede hacerlo, devuelve el puntero, y si no puede, devuelve NULL
 
 //Es invocada en
 //bat_v.c: batadv_v_mesh_free
@@ -1454,7 +1587,6 @@ int batadv_v_ogm_init(struct batadv_priv *bat_priv)
 //batadv_v_mesh_free----->batadv_v_ogm_free
 
 //batadv_v_ogm_free se publica en bat_v_ogm.h
-
 void batadv_v_ogm_free(struct batadv_priv *bat_priv)
 {
 	/**
