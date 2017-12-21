@@ -587,44 +587,73 @@ out:
  *
  * Return: 0 on success or a -ENOMEM in case of failure.
  */
-//SEGUIR ACA
+// La funcion 'batadv_v_elp_iface_enable' se encarga de configurar los recursos privados de la interfaz ELP.
+// Esta configura el tamaño del mensaje, el mensaje mismo, el numero de secuencia, flags, version, tipo. Luego agrega a la cola 
+//de trabajo la funcion 'batadv_v_elp_periodic_work', para luego reiniciar el timer.
+//
+////Es invocada en:
+//		-bat_v_elp.c: batadv_v_iface_enable
+// 		 De esta manera primero se emiten los paquetes ELP para luego continuar con los OMGs.
+//
+//Las secuencias de llamados de 'batadv_v_elp_iface_enable' son los siguientes:
+//	-batadv_v_iface_enable-->batadv_v_elp_iface_enable
+//
+//Retorna 0, en caso de tener exito, y un mensaje de 'fuera de memoria' en caso de fallar.
 int batadv_v_elp_iface_enable(struct batadv_hard_iface *hard_iface)
 {
+	//declaracion de variables 
+	//paquete elp
 	struct batadv_elp_packet *elp_packet;
 	unsigned char *elp_buff;
 	u32 random_seqno;
 	size_t size;
 	int res = -ENOMEM; //message: Out of Memory
 
+	//#define ETH_HLEN	14		/* Total octets in header.	 */
+	//#define NET_IP_ALIGN	2
+	//#define BATADV_ELP_HLEN sizeof(struct batadv_elp_packet): lo reemplazo con el tamaño del struct 'batadv_elp_packet'.
 	size = ETH_HLEN + NET_IP_ALIGN + BATADV_ELP_HLEN;
+	// le asigno memoria al paquete elp_skb del tamaño obtenido
 	hard_iface->bat_v.elp_skb = dev_alloc_skb(size);
+	//Si hubo algun error retorno el mensaje de error: Fuera de memoria
 	if (!hard_iface->bat_v.elp_skb)
 		goto out;
 
+	//ajusta el espacio libre del paquete
 	skb_reserve(hard_iface->bat_v.elp_skb, ETH_HLEN + NET_IP_ALIGN);
+	
 	elp_buff = skb_put(hard_iface->bat_v.elp_skb, BATADV_ELP_HLEN);
+	//completa con ceros
 	elp_packet = (struct batadv_elp_packet *)elp_buff;
 	memset(elp_packet, 0, BATADV_ELP_HLEN);
 
+	//seteo el tipo  --> BATADV_ELP: echo location packets for B.A.T.M.A.N. V
 	elp_packet->packet_type = BATADV_ELP;
+	//seteo la version numero 15 --> BATADV_COMPAT_VERSION:  15
 	elp_packet->version = BATADV_COMPAT_VERSION;
 
 	/* randomize initial seqno to avoid collision */
+	// aleatoriza el seqno (actual numero ELP de secuencia) inicial para evitar colisión
 	get_random_bytes(&random_seqno, sizeof(random_seqno));
 	atomic_set(&hard_iface->bat_v.elp_seqno, random_seqno);
 
 	/* assume full-duplex by default */
+	//supone full-duplex por defecto
 	hard_iface->bat_v.flags |= BATADV_FULL_DUPLEX;
 
 	/* warn the user (again) if there is no throughput data is available */
+	//adverte al usuario (nuevamente) si no hay datos de rendimiento disponibles 
 	hard_iface->bat_v.flags &= ~BATADV_WARNING_DEFAULT;
 
+	//chequea si es un interfaz Wifi
 	if (batadv_is_wifi_hardif(hard_iface))
 		hard_iface->bat_v.flags &= ~BATADV_FULL_DUPLEX;
 
+	//inicia a operar con la funcion 'batadv_v_elp_periodic_work' (con un retraso de 0, por defecto)
 	INIT_DELAYED_WORK(&hard_iface->bat_v.elp_wq,
 			  batadv_v_elp_periodic_work);
 	//restart timer for ELP periodic work
+	//reinicia el timer
 	batadv_v_elp_start_timer(hard_iface);
 	res = 0;
 
@@ -636,6 +665,7 @@ out:
  * batadv_v_elp_iface_disable - release ELP interface private resources
  * @hard_iface: interface for which the resources have to be released
  */
+//SEGUIR POR ACA
 void batadv_v_elp_iface_disable(struct batadv_hard_iface *hard_iface)
 {
 	cancel_delayed_work_sync(&hard_iface->bat_v.elp_wq);
