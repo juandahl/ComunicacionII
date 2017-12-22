@@ -736,8 +736,18 @@ void batadv_v_elp_iface_activate(struct batadv_hard_iface *primary_iface,
  *  primary interface
  * @primary_iface: the new primary interface
  */
+//La funcion 'batadv_v_elp_primary_iface_set'  setea/actualiza las interfaces del mesh.
+//
+//Es invocada en: 
+//		-bat_v.c :  batadv_v_primary_iface_set.
+//
+//Las secuencias de llamados de 'batadv_v_elp_iface_activate' son los siguientes:
+//		-bat_v.c:  batadv_v_iface_update_mac->batadv_v_primary_iface_set-->batadv_v_elp_primary_iface_set.
+//		-bat_v.c:  declaracion de 'struct batadv_algo_ops batadv_batman_v' -->batadv_v_primary_iface_set-->batadv_v_elp_primary_iface_set.
+//no posee valor de retorno.
 void batadv_v_elp_primary_iface_set(struct batadv_hard_iface *primary_iface)
 {
+	//Declaracion de estructuras
 	struct batadv_hard_iface *hard_iface;
 
 	/* update orig field of every elp iface belonging to this mesh */
@@ -749,10 +759,13 @@ void batadv_v_elp_primary_iface_set(struct batadv_hard_iface *primary_iface)
 		pos;							\
 		pos = hlist_entry_safe(rcu_dereference_raw(hlist_next_rcu(\
 			&(pos)->member)), typeof(*(pos)), member))*/
+	//Por cada una de las interfaces fisicas
 	list_for_each_entry_rcu(hard_iface, &batadv_hardif_list, list) {
+		//En caso de no coincidir con la interfaz primaria (nueva), salteo la interfaz
 		if (primary_iface->soft_iface != hard_iface->soft_iface)
 			continue;
 		//update the ELP buffer belonging to the given hard-interface
+		//actualizo la interfaz fisica
 		batadv_v_elp_iface_activate(primary_iface, hard_iface);
 	}
 	rcu_read_unlock();
@@ -775,9 +788,9 @@ void batadv_v_elp_primary_iface_set(struct batadv_hard_iface *primary_iface)
 //Las secuencias de llamados de 'batadv_v_elp_neigh_update' son los siguientes:
 //		
 //Es invocada en:
-//		SEGUIR ACA
+//		-bat_v_elp.c: batadv_v_elp_packet_recv
 // Las secuencias de llamados de 'batadv_v_elp_neigh_update' son los siguientes:
-//		
+//		bat_v.c int __init batadv_v_init --> batadv_v_elp_packet_recv--> batadv_v_elp_neigh_update
 //No poseo valor de retorno
 static void batadv_v_elp_neigh_update(struct batadv_priv *bat_priv,
 				      u8 *neigh_addr,
@@ -894,14 +907,17 @@ orig_free:
  * Return: NET_RX_SUCCESS and consumes the skb if the packet was peoperly
  * processed or NET_RX_DROP in case of failure.
  */
+// La funcion 'batadv_v_elp_packet_recv' cumple la funcion de control principal de los paquete ELP.
 int batadv_v_elp_packet_recv(struct sk_buff *skb,
 			     struct batadv_hard_iface *if_incoming)
 {
 	//access to the private data
+	//Declaracion e instanciacion de variables
 	struct batadv_priv *bat_priv = netdev_priv(if_incoming->soft_iface);
 	struct batadv_elp_packet *elp_packet;
 	struct batadv_hard_iface *primary_if;
 
+	//obtengo el encabezdo del mensaje
 	struct ethhdr *ethhdr = (struct ethhdr *)skb_mac_header(skb);
 	bool res;
 	int ret = NET_RX_DROP; // message "packet dropped"
@@ -914,8 +930,17 @@ int batadv_v_elp_packet_recv(struct sk_buff *skb,
 	*	-create a copy of the skb, if needed, to modify it
 	* 	-change  of keep skb linear, if needed.
 	*/
+	/*
+	* Realiza los siguientes controles:
+	* 	-paquete de gotas si no tiene el tamaño mínimo necesario
+	* 	-paquete con indicación de difusión pero destinatario de unidifusión
+	* 	-packet con dirección de remitente no válida
+	* 	-cree una copia del skb, si es necesario, para modificarlo
+	* 	-cambio de mantener skb lineal, si es necesario.
+	*/
 	res = batadv_check_management_packet(skb, if_incoming, BATADV_ELP_HLEN);
 	if (!res)
+		//En caso de no cumplir con la validacion, libero los recursos tomados por el mensaje
 		goto free_skb;
 
 	/**
@@ -926,12 +951,15 @@ int batadv_v_elp_packet_recv(struct sk_buff *skb,
 	*
 	* Return: 'true' if the mac address was found, false otherwise.
 	*/
+	//corrobora si la dirección MAC dada pertenece a cualquiera de las interfaces reales en la malla actual
 	if (batadv_is_my_mac(bat_priv, ethhdr->h_source))
+		//En caso contrario, libero los recursos
 		goto free_skb;
 
 	/* did we receive a B.A.T.M.A.N. V ELP packet on an interface
 	 * that does not have B.A.T.M.A.N. V ELP enabled ?
 	 */
+	//SEGUIR POR ACA
 	if (strcmp(bat_priv->algo_ops->name, "BATMAN_V") != 0)
 		goto free_skb;
 
