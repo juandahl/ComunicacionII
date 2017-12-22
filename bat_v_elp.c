@@ -782,11 +782,7 @@ void batadv_v_elp_primary_iface_set(struct batadv_hard_iface *primary_iface)
  * ELP packet.
  */
 // La funcion 'batadv_v_elp_neigh_update' actualiza el estado del nodo ELP vecino con la data recibida del nuevo paquete ELP.
-//
-// Es invocada en:
-//		
-//Las secuencias de llamados de 'batadv_v_elp_neigh_update' son los siguientes:
-//		
+//	
 //Es invocada en:
 //		-bat_v_elp.c: batadv_v_elp_packet_recv
 // Las secuencias de llamados de 'batadv_v_elp_neigh_update' son los siguientes:
@@ -907,7 +903,14 @@ orig_free:
  * Return: NET_RX_SUCCESS and consumes the skb if the packet was peoperly
  * processed or NET_RX_DROP in case of failure.
  */
-// La funcion 'batadv_v_elp_packet_recv' cumple la funcion de control principal de los paquete ELP.
+// La funcion 'batadv_v_elp_packet_recv' cumple la funcion de control/gestion de la recepcion de los paquete ELP.
+//
+//Es invocada en:
+//		-bat_v.c:  __init batadv_v_init. 
+//		Se utiliza en la funcion de inicializacion de B.A.T.M.A.N. para setear la funcion encargada de la gestion de paquetes ELP.
+//
+//Las secuencias de llamados de 'batadv_v_elp_packet_recv' son los siguientes:
+//		-bat_v.c:  __init batadv_v_init-->batadv_v_elp_packet_recv
 int batadv_v_elp_packet_recv(struct sk_buff *skb,
 			     struct batadv_hard_iface *if_incoming)
 {
@@ -959,26 +962,32 @@ int batadv_v_elp_packet_recv(struct sk_buff *skb,
 	/* did we receive a B.A.T.M.A.N. V ELP packet on an interface
 	 * that does not have B.A.T.M.A.N. V ELP enabled ?
 	 */
-	//SEGUIR POR ACA
+	//Pregunto por el algoritmo de ruteo utilizado en la interfaz mesh.En caso de no ser B.A.T.M.A.N, libero los recursos.
 	if (strcmp(bat_priv->algo_ops->name, "BATMAN_V") != 0)
 		goto free_skb;
-
+	
+	//obtengo ls datos del paquete (mensaje)
 	elp_packet = (struct batadv_elp_packet *)skb->data;
 
 	//#define batadv_dbg(type, bat_priv, arg...) \ _batadv_dbg(type, bat_priv, 0, ## arg)
+	//logging de la accion realizada
 	batadv_dbg(BATADV_DBG_BATMAN, bat_priv,
 		   "Received ELP packet from %pM seqno %u ORIG: %pM\n",
 		   ethhdr->h_source, ntohl(elp_packet->seqno),
 		   elp_packet->orig);
 	// This is one of the hard-interfaces assigned to this mesh interface
-    //  becomes the primary interface
+    	//  becomes the primary interface
+	//obtengo la interfaz primaria
 	primary_if = batadv_primary_if_get_selected(bat_priv);
 	if (!primary_if)
+		//si ocurre alun error, libero los recursos
 		goto free_skb;
 	//update an ELP neighbour node
+	/actualizo el estado del nodo ELP vecino con la data recibida del nuevo paquete ELP.
 	batadv_v_elp_neigh_update(bat_priv, ethhdr->h_source, if_incoming,
 				  elp_packet);
-
+	
+	//seteo el exito de la operacion
 	ret = NET_RX_SUCCESS; // message: “keep 'em coming, baby”
 	/**
 	* batadv_hardif_put - decrement the hard interface refcounter and possibly
@@ -997,6 +1006,7 @@ free_skb:
 		*	Functions identically to kfree_skb, but kfree_skb assumes that the frame
 		*	is being dropped after a failure and notes that
 		*/
+		//libero el recurso
 		consume_skb(skb);
 	else
 		/**
@@ -1006,6 +1016,7 @@ free_skb:
 		*	Drop a reference to the buffer and free it if the usage count has
 		*	hit zero.
 		*/
+		//libero recurso
 		kfree_skb(skb);
 
 	return ret;
