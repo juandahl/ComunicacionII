@@ -591,7 +591,7 @@ out:
 // Esta configura el tamaño del mensaje, el mensaje mismo, el numero de secuencia, flags, version, tipo. Luego agrega a la cola 
 //de trabajo la funcion 'batadv_v_elp_periodic_work', para luego reiniciar el timer.
 //
-////Es invocada en:
+// Es invocada en:
 //		-bat_v_elp.c: batadv_v_iface_enable
 // 		 De esta manera primero se emiten los paquetes ELP para luego continuar con los OMGs.
 //
@@ -665,12 +665,25 @@ out:
  * batadv_v_elp_iface_disable - release ELP interface private resources
  * @hard_iface: interface for which the resources have to be released
  */
-//SEGUIR POR ACA
+//La funcion 'batadv_v_elp_iface_disable' se encarga de liberar los recursos tomados por la interfaz ELP (memoria)
+//
+// Es invocada en:
+//		-bat_v.c: batadv_v_iface_disable. Deshabilita la interfaz ELP (limpia memoria).
+// 		-bat_v.c:  batadv_v_iface_enable . En el momento se habilita la emision de paquetes OGMs, en caso de ocurrir algun error 
+//               en el llamado a ' batadv_v_ogm_iface_enable' se deshabilita la interfaz.
+//
+//Las secuencias de llamados de 'batadv_v_elp_iface_disable' son los siguientes:
+//	-bat_v.c: declaracion del struct batadv_algo_ops-->batadv_v_iface_disable-->batadv_v_elp_iface_disable
+//	-bat_v.c: declaracion del struct batadv_algo_ops-->batadv_v_iface_enable-->batadv_v_elp_iface_disable
+//
+//No posee valor de retorno
 void batadv_v_elp_iface_disable(struct batadv_hard_iface *hard_iface)
 {
+	//cancela un trabajo retrasado y esperar a que termine (kernel).
 	cancel_delayed_work_sync(&hard_iface->bat_v.elp_wq);
-
+	//libera el buffer del mensaje
 	dev_kfree_skb(hard_iface->bat_v.elp_skb);
+	//setea a null el mismo
 	hard_iface->bat_v.elp_skb = NULL;
 }
 
@@ -680,17 +693,30 @@ void batadv_v_elp_iface_disable(struct batadv_hard_iface *hard_iface)
  * @primary_iface: the new primary interface
  * @hard_iface: interface holding the to-be-updated buffer
  */
+// La funcion 'batadv_v_elp_iface_activate' actualiza el buffer ELP, actualizando la interfaz fisica.
+//
+// Es invocada en:
+//		-bat_v_elp.c: batadv_v_elp_primary_iface_set. Al cambiar la informacion interna de la nueva interfaz fisica.
+//		-bat_v.c: batadv_v_iface_activate. Al activar la nueva interfaz fisica.
+//
+//Las secuencias de llamados de 'batadv_v_elp_iface_activate' son los siguientes:
+//		-bat_v_elp.c: batadv_v_elp_primary_iface_set-->batadv_v_elp_iface_activate
+//		-bat_v.c: batadv_v_iface_activate-->batadv_v_elp_iface_activate
+//no posee valor de retorno.
 void batadv_v_elp_iface_activate(struct batadv_hard_iface *primary_iface,
 				 struct batadv_hard_iface *hard_iface)
 {
+	//Declaracion variables
 	struct batadv_elp_packet *elp_packet;
 	struct sk_buff *skb;
 
+	//Si no contiene mensaje EPL, sale de la funcion.
 	if (!hard_iface->bat_v.elp_skb)
 		return;
-
+	//pido el paquete
 	skb = hard_iface->bat_v.elp_skb;
 	//obtain the private data of ELP packet.
+	//obtengo los privados datos del mismo (struct)
 	elp_packet = (struct batadv_elp_packet *)skb->data;
 	/**
 	* ether_addr_copy - Copy an Ethernet address
@@ -700,6 +726,7 @@ void batadv_v_elp_iface_activate(struct batadv_hard_iface *primary_iface,
 	* Please note: dst & src must both be aligned to u16.
 	*/
 	//this copies the source address of the ELP interface in the physical interface.
+	//copio la direccion del origen del paquete en la direccion en la interfaz fisica
 	ether_addr_copy(elp_packet->orig,
 			primary_iface->net_dev->dev_addr);
 }
@@ -741,12 +768,24 @@ void batadv_v_elp_primary_iface_set(struct batadv_hard_iface *primary_iface)
  * Updates the ELP neighbour node state with the data received within the new
  * ELP packet.
  */
+// La funcion 'batadv_v_elp_neigh_update' actualiza el estado del nodo ELP vecino con la data recibida del nuevo paquete ELP.
+//
+// Es invocada en:
+//		
+//Las secuencias de llamados de 'batadv_v_elp_neigh_update' son los siguientes:
+//		
+//Es invocada en:
+//		SEGUIR ACA
+// Las secuencias de llamados de 'batadv_v_elp_neigh_update' son los siguientes:
+//		
+//No poseo valor de retorno
 static void batadv_v_elp_neigh_update(struct batadv_priv *bat_priv,
 				      u8 *neigh_addr,
 				      struct batadv_hard_iface *if_incoming,
 				      struct batadv_elp_packet *elp_packet)
 
 {
+	//Declaracion de variables
 	struct batadv_neigh_node *neigh;
 	struct batadv_orig_node *orig_neigh;
 	struct batadv_hardif_neigh_node *hardif_neigh;
@@ -763,7 +802,9 @@ static void batadv_v_elp_neigh_update(struct batadv_priv *bat_priv,
 	* does not exist it is allocated here. In case of allocation failure returns
 	* NULL.
 	*/
+	//obtengo el nodo originator correspondiente a la direccion especificada.
 	orig_neigh = batadv_v_ogm_orig_get(bat_priv, elp_packet->orig);
+	//si es nulo, entonces salgo de la funcion
 	if (!orig_neigh)
 		return;
 
@@ -775,9 +816,12 @@ static void batadv_v_elp_neigh_update(struct batadv_priv *bat_priv,
 	*
 	* Return: the neighbour node if found or created or NULL otherwise.
 	*/
+	//obtengo el nodo vecino a partir de el nodo originator, la interfaz de conexion y la direccion mac del nodo vecino
 	neigh = batadv_neigh_node_get_or_create(orig_neigh,
 						if_incoming, neigh_addr);
+	//si no lo puedo creo o encontrar
 	if (!neigh)
+		//libero el nodo originator obtenido anteriormente
 		goto orig_free;
 	
 	/**
@@ -789,24 +833,33 @@ static void batadv_v_elp_neigh_update(struct batadv_priv *bat_priv,
 	*
 	* Return: neighbor when found. Othwerwise NULL
 	*/
+	//obtengo la interfaz fisica del nodo vecino
 	hardif_neigh = batadv_hardif_neigh_get(if_incoming, neigh_addr);
+	// si ocurre algun error..
 	if (!hardif_neigh)
+		//libero la estructura obtenida anteriormente
 		goto neigh_free;
 
+	//obtengo el ultimo valor de numero de secuencia
 	elp_latest_seqno = hardif_neigh->bat_v.elp_latest_seqno;
+	//calculo la direncia entre el numero de secuencia del paquete y el ultimo obtenido
 	seqno_diff = ntohl(elp_packet->seqno) - elp_latest_seqno;
 
 	/* known or older sequence numbers are ignored. However always adopt
 	 * if the router seems to have been restarted.
 	 */
+	// Si dicha diferencia NO es menor a 1 o mayor que -64 (valor definido como macro de 'BATADV_ELP_MAX_AGE').
 	if (seqno_diff < 1 && seqno_diff > -BATADV_ELP_MAX_AGE)
+		//libero la interfaz fisica vecina
 		goto hardif_free;
 
+	//En caso contrario, actualizo la ultima visita del nodo vecino, de la interfaz fisica del vecino. Tambien setea el numero de secuencia y el intervalo de emision
 	neigh->last_seen = jiffies;
 	hardif_neigh->last_seen = jiffies;
 	hardif_neigh->bat_v.elp_latest_seqno = ntohl(elp_packet->seqno);
 	hardif_neigh->bat_v.elp_interval = ntohl(elp_packet->elp_interval);
-
+//por ultimo libero los recursos utlizados
+	
 hardif_free:
 	if (hardif_neigh)
 		/**
