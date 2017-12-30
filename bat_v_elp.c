@@ -424,7 +424,7 @@ batadv_v_elp_wifi_neigh_probe(struct batadv_hardif_neigh_node *neigh)
 //			-si  el estado actual del mesh esta activado
 //			-si la interfaz  no esta en uso o eliminada
 //			-si la interfaz  se encuentra activada
-//Una vez verificado todo esto, se en bradcast a todos sus nodos vecinos.
+//Una vez verificado todo esto, se envia en broadcast a todos sus nodos vecinos.
 //
 //Es invocada en:
 //		-bat_v_elp.c: batadv_v_elp_iface_enable.
