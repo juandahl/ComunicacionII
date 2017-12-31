@@ -909,7 +909,12 @@ batadv_v_orig_dump(struct sk_buff *msg, struct netlink_callback *cb,
 	cb->args[2] = sub;
 }
 
-
+//Obtengo las diferencias de rendimiento entre los nodos vecinos
+//Es invocado en la inicializacion del "struct static struct batadv_algo_ops batadv_batman_v __read_mostly".
+//
+//Secuencia de de llamadas:
+//			-bat_v. --> __read_mostly --> batadv_v_neigh_cmp
+//No es invocada en ningun metodo
 static int batadv_v_neigh_cmp(struct batadv_neigh_node *neigh1,
 			      struct batadv_hard_iface *if_outgoing1,
 			      struct batadv_neigh_node *neigh2,
@@ -917,17 +922,23 @@ static int batadv_v_neigh_cmp(struct batadv_neigh_node *neigh1,
 {
 	struct batadv_neigh_ifinfo *ifinfo1, *ifinfo2;
 	int ret = 0;
-
+	
+	//busca la ifinfo del primer nodo vecino pasado como parametro
 	ifinfo1 = batadv_neigh_ifinfo_get(neigh1, if_outgoing1);
+	// si falla el primero, retorno 0
 	if (WARN_ON(!ifinfo1))
 		goto err_ifinfo1;
-
+	//busca la ifinfo del segundo nodo vecino pasado como parametro
 	ifinfo2 = batadv_neigh_ifinfo_get(neigh2, if_outgoing2);
+	
+	//si tengo error, libero de memoria ifinfo1
 	if (WARN_ON(!ifinfo2))
 		goto err_ifinfo2;
 
+	//obtengo la diferencia de rendimientos entre los nodos vecinos
 	ret = ifinfo1->bat_v.throughput - ifinfo2->bat_v.throughput;
-
+	
+	//libera la informacion de ifinfo2
 	batadv_neigh_ifinfo_put(ifinfo2);
 err_ifinfo2:
 	batadv_neigh_ifinfo_put(ifinfo1);
@@ -935,30 +946,42 @@ err_ifinfo1:
 	return ret;
 }
 
+
+//Compara que el throughput de un nodo con otro, verificando que el throughput de uno supero los 3/4 del throughput del otro nodo.
+//En caso de cualquier error en las invocaciones retorna falso.
+//
+//No es invocado. Se utiliza en la inicializacion de la estructura de bat_v
 static bool batadv_v_neigh_is_sob(struct batadv_neigh_node *neigh1,
 				  struct batadv_hard_iface *if_outgoing1,
 				  struct batadv_neigh_node *neigh2,
 				  struct batadv_hard_iface *if_outgoing2)
 {
+	//Declaracion de variables de estado
 	struct batadv_neigh_ifinfo *ifinfo1, *ifinfo2;
 	u32 threshold;
 	bool ret = false;
-
+	//busca la ifinfo del primer nodo vecino pasado como parametro
 	ifinfo1 = batadv_neigh_ifinfo_get(neigh1, if_outgoing1);
 	if (WARN_ON(!ifinfo1))
+		//retorno falso
 		goto err_ifinfo1;
-
+	//busca la ifinfo del segundo nodo vecino pasado como parametro
 	ifinfo2 = batadv_neigh_ifinfo_get(neigh2, if_outgoing2);
 	if (WARN_ON(!ifinfo2))
 		goto err_ifinfo2;
 
+	
 	threshold = ifinfo1->bat_v.throughput / 4;
+	//Actualizo el limite con 3/4 del rendimiento actual
 	threshold = ifinfo1->bat_v.throughput - threshold;
 
+	//verifico que el throughput hacia el nodo 2 supere al limite (3/4 throughput de ir por la interfaz 1)
 	ret = ifinfo2->bat_v.throughput > threshold;
-
+	
+	//libero la memoria de ocupada por ifinfo2
 	batadv_neigh_ifinfo_put(ifinfo2);
 err_ifinfo2:
+	//libero la memoria de ocupada por ifinfo1
 	batadv_neigh_ifinfo_put(ifinfo1);
 err_ifinfo1:
 	return ret;
@@ -968,31 +991,48 @@ err_ifinfo1:
  * batadv_v_init_sel_class - initialize GW selection class
  * @bat_priv: the bat priv with all the soft interface information
  */
+//inicializacion de la clase de seleccion del gateway
 static void batadv_v_init_sel_class(struct batadv_priv *bat_priv)
 {
 	/* set default throughput difference threshold to 5Mbps */
+	/* establece un limite de diferencia de rendimiento predeterminado en 5Mbps */
 	atomic_set(&bat_priv->gw.sel_class, 50);
 }
 
+
+// Esta funcion es seteada como parte de la inicilizacion del struct: "static struct batadv_algo_ops batadv_batman_v __read_mostly".
+// La propiedad setea es gw.store_sel_class
+// 
+//No es invocada en ningun metodo.
 static ssize_t batadv_v_store_sel_class(struct batadv_priv *bat_priv,
 					char *buff, size_t count)
 {
 	u32 old_class, class;
-
+	
+	//retorna el rendimiento de la interfaz, en caso de error notifico el mismo . El valor es devuelto en la variable "class".
 	if (!batadv_parse_throughput(bat_priv->soft_iface, buff,
 				     "B.A.T.M.A.N. V GW selection class",
 				     &class))
-		return -EINVAL;
+		return -EINVAL; //flag de argumento invalido
 
+	//antes de actualizar la vieja sel_class (throughput del gateway), obtengo su referencia
 	old_class = atomic_read(&bat_priv->gw.sel_class);
+	//actualizo la sel_class con la obtenida anteriormente
 	atomic_set(&bat_priv->gw.sel_class, class);
-
+	
+	//si son distintos los rendimientos obtenidos
 	if (old_class != class)
+		// Si son distintos, se fuerza una reseleccion de gateway. Se un indicador para recordar al
+		// componente GW que realice una nueva reselección del gateway.Sin embargo, esta función no 
+		// garantiza que el gateway actual va a ser deseleccionado. El mecanismo de reselección puede 
+		// elegir el mismo gateway una vez más.
 		batadv_gw_reselect(bat_priv);
-
 	return count;
 }
 
+
+//Imprime la informacion del gateway en Mbs (throughput actualizado en "batadv_v_store_sel_class")
+//No es invocado en ningun metodo. (solo en inicializacion del struct)
 static ssize_t batadv_v_show_sel_class(struct batadv_priv *bat_priv, char *buff)
 {
 	u32 class = atomic_read(&bat_priv->gw.sel_class);
