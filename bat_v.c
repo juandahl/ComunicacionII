@@ -1049,18 +1049,34 @@ static ssize_t batadv_v_show_sel_class(struct batadv_priv *bat_priv, char *buff)
  *
  * Return: 0 on success, -1 on failure
  */
+//La funcion "batadv_v_gw_throughput_get" devuelve en la variable 'bw' el ancho de banda GW para un determinado gateway.
+// La métrica se calcula como el mínimo entre el throughput del GW y el rendimiento del trayecto en la red.
+//
+//Es invocada en: 
+//		-bat_v.c -->batadv_v_gw_get_best_gw_node -->batadv_v_gw_throughput_get. 
+//			    Se utiliza al buscar al mejor gateway con la mejor metrica.
+//		-bat_v.c -->batadv_v_gw_is_eligible -->batadv_v_gw_throughput_get.
+//			    Se utiliza para verificar si un originator puede ser seleccionado como gateway (GW).
+//
+//Retorna 0 si tiene exito, o -1 en caso de error.
 static int batadv_v_gw_throughput_get(struct batadv_gw_node *gw_node, u32 *bw)
 {
+	//Declaracion de variables utilizadas en el metodo
 	struct batadv_neigh_ifinfo *router_ifinfo = NULL;
 	struct batadv_orig_node *orig_node;
 	struct batadv_neigh_node *router;
 	int ret = -1;
-
+	
+	//Obtengo la estructura del nodo originator correspondiente (puntero)
 	orig_node = gw_node->orig_node;
+	//obtengo el nodo vecino ("per outgoing") que deberia ser enrutador del nodo originator 
+	//El metodo 'batadv_orig_router_get'  devuelve el enrutador a partir de un listado de
+	//estos contenidos en la estructura del origninator.
 	router = batadv_orig_router_get(orig_node, BATADV_IF_DEFAULT);
 	if (!router)
 		goto out;
-
+	
+	//obtengo la informacion del nodo vecino("per outgoing").
 	router_ifinfo = batadv_neigh_ifinfo_get(router, BATADV_IF_DEFAULT);
 	if (!router_ifinfo)
 		goto out;
@@ -1070,11 +1086,17 @@ static int batadv_v_gw_throughput_get(struct batadv_gw_node *gw_node, u32 *bw)
 	 * This gives us an approximation of the effective throughput that the
 	 * client can expect via this particular GW node
 	 */
+	/* la métrica de GW se calcula como el mínimo entre el rendimiento de la ruta
+	* para llegar al propio GW y al ancho de banda anunciado.
+	* Esto nos da una aproximación del rendimiento efectivo que el
+	* el cliente puede esperar a través de este nodo GW en particular
+	*/
 	*bw = router_ifinfo->bat_v.throughput;
 	*bw = min_t(u32, *bw, gw_node->bandwidth_down);
 
 	ret = 0;
 out:
+	//Libero los recursos utilizados
 	if (router)
 		batadv_neigh_node_put(router);
 	if (router_ifinfo)
@@ -1089,6 +1111,9 @@ out:
  *
  * Return: the GW node having the best GW-metric, NULL if no GW is known
  */
+//La funcion retorna el mejor nodo gateway (GW).
+//Returna el nodo con la mejor metrica GW, o NULL, si no se conoce el GW.
+//Seguir aca
 static struct batadv_gw_node *
 batadv_v_gw_get_best_gw_node(struct batadv_priv *bat_priv)
 {
