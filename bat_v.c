@@ -1334,36 +1334,60 @@ static void batadv_v_gw_print(struct batadv_priv *bat_priv,
  *
  * Return: Error code, or 0 on success
  */
+//La funcion "batadv_v_gw_dump_entry" convierte la entrada de un gw en un mensaje.
+//
+//Es invocada en:
+//		-bat_v.c --> batadv_v_gw_dump -->batadv_v_gw_dump_entry
+//		Recorre la lista de nodos gw y por cada uno de ellos crea un mensaje 
+//		llamando al metodo batadv_v_gw_dump_entry.
+//
+//Retorna 0 (cero) en caso de exito, o en caso de fallo, retorno el codigo correspondiente.
 static int batadv_v_gw_dump_entry(struct sk_buff *msg, u32 portid, u32 seq,
 				  struct batadv_priv *bat_priv,
 				  struct batadv_gw_node *gw_node)
 {
+	//Declaracion de variables del metodo.
 	struct batadv_neigh_ifinfo *router_ifinfo = NULL;
 	struct batadv_neigh_node *router;
 	struct batadv_gw_node *curr_gw;
 	int ret = -EINVAL;
 	void *hdr;
 
+	//Obtengo el vecino que deberia ser enrutador para el orig_node
 	router = batadv_orig_router_get(gw_node->orig_node, BATADV_IF_DEFAULT);
 	if (!router)
+		//En caso de error, libero los recursos y retorno el codigo 22 (argumento invalido).
 		goto out;
 
+	//Obtengo su informacion del vecino por la interfaz de salida
 	router_ifinfo = batadv_neigh_ifinfo_get(router, BATADV_IF_DEFAULT);
+	
 	if (!router_ifinfo)
+		//En caso de error, libero los recursos y retorno el codigo 22 (argumento invalido).
 		goto out;
-
+	//obtengo el GW actual 
 	curr_gw = batadv_gw_get_selected_gw_node(bat_priv);
-
+	
+	//Creo un encabezado generico para el mensaje
 	hdr = genlmsg_put(msg, portid, seq, &batadv_netlink_family,
 			  NLM_F_MULTI, BATADV_CMD_GET_GATEWAYS);
+	//Si fallo en la generacion del mismo, seteo el codigo de error ( 55 - "No buffer space available") y libero los recursos utilizados.
 	if (!hdr) {
 		ret = -ENOBUFS;
 		goto out;
 	}
-
+	
+	//Seteo el numero mensaje de error
 	ret = -EMSGSIZE;
 
+	//Agrega un atributo al buffer socket(gw_node->orig_node->orig)
+	//Agrega un atributo u32 al buffer socket(router_ifinfo->bat_v.throughput)
+	//Agrega un atributo al burffer socket(router->addr)
+	//Agrega un atributo al buffer socket(router->if_incoming->net_dev->name)
+	//Agrega un atributo u32 al buffer socket(gw_node->bandwidth_down)
+	//Agrega un atributo u32 al buffer socket(gw_node->bandwidth_up)
 	if (curr_gw == gw_node) {
+		//agrego al mensaje
 		if (nla_put_flag(msg, BATADV_ATTR_FLAG_BEST)) {
 			genlmsg_cancel(msg, hdr);
 			goto out;
@@ -1407,6 +1431,7 @@ static int batadv_v_gw_dump_entry(struct sk_buff *msg, u32 portid, u32 seq,
 	genlmsg_end(msg, hdr);
 	ret = 0;
 
+//libero los recursos y retorno.
 out:
 	if (router_ifinfo)
 		batadv_neigh_ifinfo_put(router_ifinfo);
@@ -1421,21 +1446,29 @@ out:
  * @cb: Control block containing additional options
  * @bat_priv: The bat priv with all the soft interface information
  */
+//La funcion "batadv_v_gw_dump" recorre la lista de nodos gw y por cada uno de ellos crea un mensaje 
+//llamando al metodo batadv_v_gw_dump_entry.
+//
+//No es invocada en ninguna funcion, solo se utiliza en la inicializacion del struct de bat_v.
+//No retorna valores
 static void batadv_v_gw_dump(struct sk_buff *msg, struct netlink_callback *cb,
 			     struct batadv_priv *bat_priv)
 {
+	//Obtengo el puerto
 	int portid = NETLINK_CB(cb->skb).portid;
 	struct batadv_gw_node *gw_node;
 	int idx_skip = cb->args[0];
 	int idx = 0;
 
+	//Bloqueo los recursos para no generar inconsistencias
 	rcu_read_lock();
 	hlist_for_each_entry_rcu(gw_node, &bat_priv->gw.gateway_list, list) {
 		if (idx++ < idx_skip)
 			continue;
-
+		//genero un mensaje para cada gateway
 		if (batadv_v_gw_dump_entry(msg, portid, cb->nlh->nlmsg_seq,
 					   bat_priv, gw_node)) {
+			// en caso de error, libero el bloqueo y retorno.
 			idx_skip = idx - 1;
 			goto unlock;
 		}
@@ -1444,7 +1477,8 @@ static void batadv_v_gw_dump(struct sk_buff *msg, struct netlink_callback *cb,
 	idx_skip = idx;
 unlock:
 	rcu_read_unlock();
-
+	//Libero el bloqueo
+	
 	cb->args[0] = idx_skip;
 }
 
