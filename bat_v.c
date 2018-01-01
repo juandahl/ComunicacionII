@@ -1113,36 +1113,44 @@ out:
  */
 //La funcion retorna el mejor nodo gateway (GW).
 //Returna el nodo con la mejor metrica GW, o NULL, si no se conoce el GW.
-//Seguir aca
+//
+//No es invocada en ningun metodo, solo se setea en la struct de configuracion de bat_v.
 static struct batadv_gw_node *
 batadv_v_gw_get_best_gw_node(struct batadv_priv *bat_priv)
 {
+	//Declaracion de variables del metodo
 	struct batadv_gw_node *gw_node, *curr_gw = NULL;
 	u32 max_bw = 0, bw;
 
+	//Bloqueo los recursos para no tener inconsistencias
 	rcu_read_lock();
+	//recorre el listado de GWs disponibles de la interfaz que recibe como parametro (enrutadores).
 	hlist_for_each_entry_rcu(gw_node, &bat_priv->gw.gateway_list, list) {
+		//Si no posee referencias continuo con el siguiente GW
 		if (!kref_get_unless_zero(&gw_node->refcount))
 			continue;
-
+		//Obtengo el throughput del nodo, devuelto en la variable "bw". Si ocurre algun error (return -1), libero el recurso "gw_node"
 		if (batadv_v_gw_throughput_get(gw_node, &bw) < 0)
 			goto next;
-
+		//Si el throughput de nodo seleccionado no supera el rendimiento del nodo seleccionado hasta el momento, libero el recurso "gw_node"
 		if (curr_gw && (bw <= max_bw))
 			goto next;
-
+		
+		//Si es distindo de null
 		if (curr_gw)
+			//libero la memoria de la variable "curr_gw"
 			batadv_gw_node_put(curr_gw);
-
+		//Si llego hasta esta instancia, es porque se encontro un mejor candidato
 		curr_gw = gw_node;
 		kref_get(&curr_gw->refcount);
+		//Seteo el mejor throughput obtenido hasta el momento
 		max_bw = bw;
 
 next:
 		batadv_gw_node_put(gw_node);
 	}
 	rcu_read_unlock();
-
+	//Libero el bloqueo
 	return curr_gw;
 }
 
@@ -1154,27 +1162,39 @@ next:
  *
  * Return: true if orig_node can be selected as current GW, false otherwise
  */
+//La funcion "batadv_v_gw_is_eligible" verifica si el originator deberia ser seleccionado como GW.
+//
+//Retorna "true" si el orignator actual puede ser seleccionado como GW, o "false" en caso contrario.
+//
+//No es invocada en ningun metodo, solo se setea en la struct de configuracion de bat_v.
 static bool batadv_v_gw_is_eligible(struct batadv_priv *bat_priv,
 				    struct batadv_orig_node *curr_gw_orig,
 				    struct batadv_orig_node *orig_node)
 {
+	//Declaracion de variables del metodo.
 	struct batadv_gw_node *curr_gw, *orig_gw = NULL;
 	u32 gw_throughput, orig_throughput, threshold;
 	bool ret = false;
-
+	
+	//Obtengo el limite de la interfaz
 	threshold = atomic_read(&bat_priv->gw.sel_class);
-
+	
+	//Solicito el originator utilizado como GW actual
 	curr_gw = batadv_gw_node_get(bat_priv, curr_gw_orig);
+	//Si no lo encuentro por algun error
 	if (!curr_gw) {
 		ret = true;
+		//Libero los recursos utilizados y retorno true.
 		goto out;
 	}
 
+	//Obtengo el rendimiento del mismo, asigna i ocurre algun error returno true
 	if (batadv_v_gw_throughput_get(curr_gw, &gw_throughput) < 0) {
 		ret = true;
 		goto out;
 	}
-
+	
+	//Obtengo los mismos datos con el originator
 	orig_gw = batadv_gw_node_get(bat_priv, orig_node);
 	if (!orig_node)
 		goto out;
@@ -1182,12 +1202,15 @@ static bool batadv_v_gw_is_eligible(struct batadv_priv *bat_priv,
 	if (batadv_v_gw_throughput_get(orig_gw, &orig_throughput) < 0)
 		goto out;
 
+	//Si el originator obtenido posee menor rendimiento que el actual, libero recursos y retorno.
 	if (orig_throughput < gw_throughput)
 		goto out;
 
+	//Si tampoco sepera el limite, libero recursos y retorno.
 	if ((orig_throughput - gw_throughput) < threshold)
 		goto out;
-
+	
+	//Logging--> imprimo la info del mejor gateway encontrado.
 	batadv_dbg(BATADV_DBG_BATMAN, bat_priv,
 		   "Restarting gateway selection: better gateway found (throughput curr: %u, throughput new: %u)\n",
 		   gw_throughput, orig_throughput);
@@ -1203,7 +1226,22 @@ out:
 }
 
 #ifdef CONFIG_BATMAN_ADV_DEBUGFS
+/**********************************************IMPRESIONES DE DEBUGGING**********************************************/
+
 /* fails if orig_node has no router */
+//La funcion "batadv_v_gw_write_buffer_text" imprime la siguiente informacion del gateway:
+//		-originator ethernet address
+//		-last throughput metric received from originator via this neigh / 10
+//		-last throughput metric received from originator via this neigh%10 + la direccion del router (GW)
+//		-nombre de la interfaz fisica saliente
+//		-ancho de banda de descarga del GW /10
+//		-ancho de banda de descarga del GW % 10
+//		-ancho de banda de subida del GW / 10
+//		-ancho de banda de subida del GW % 10
+//
+//Es invocada en: 
+//		bat_v.c --> batadv_v_gw_print --> batadv_v_gw_write_buffer_text
+//			    Es llamada al hora de imprimir el listado de gateway de la interfaz fisica
 static int batadv_v_gw_write_buffer_text(struct batadv_priv *bat_priv,
 					 struct seq_file *seq,
 					 const struct batadv_gw_node *gw_node)
@@ -1214,13 +1252,16 @@ static int batadv_v_gw_write_buffer_text(struct batadv_priv *bat_priv,
 	int ret = -1;
 
 	router = batadv_orig_router_get(gw_node->orig_node, BATADV_IF_DEFAULT);
+	//Si no posee router, libero recursos y retorno.
 	if (!router)
 		goto out;
-
+	
 	router_ifinfo = batadv_neigh_ifinfo_get(router, BATADV_IF_DEFAULT);
+	//Si no posee datos/info, libero recursos y retorno.
 	if (!router_ifinfo)
 		goto out;
 
+	//obtengo el GW seleccionado de la interfaz correspondiente
 	curr_gw = batadv_gw_get_selected_gw_node(bat_priv);
 
 	seq_printf(seq, "%s %pM (%9u.%1u) %pM [%10s]: %u.%u/%u.%u MBit\n",
@@ -1235,6 +1276,7 @@ static int batadv_v_gw_write_buffer_text(struct batadv_priv *bat_priv,
 		   gw_node->bandwidth_up % 10);
 	ret = seq_has_overflowed(seq) ? -1 : 0;
 
+	//Libero los recursos utilizados
 	if (curr_gw)
 		batadv_gw_node_put(curr_gw);
 out:
@@ -1250,25 +1292,33 @@ out:
  * @bat_priv: the bat priv with all the soft interface information
  * @seq: gateway table seq_file struct
  */
+// La funcion "batadv_v_gw_print" imprime el listado de gateway de la interfaz pasada como parametro.
+//
+// No es invocada en ningun metodo, solo se setea en la struct de configuracion de bat_v.
 static void batadv_v_gw_print(struct batadv_priv *bat_priv,
 			      struct seq_file *seq)
 {
+	//Declaracion de variables de metodo
 	struct batadv_gw_node *gw_node;
 	int gw_count = 0;
 
 	seq_puts(seq,
 		 "      Gateway        ( throughput)           Nexthop [outgoingIF]: advertised uplink bandwidth\n");
 
+	//Bloque el recurso para no generar inconsistencias
 	rcu_read_lock();
+	//Por cada nodo perteneciente al lista gateways de la interfaz, imprimo su informacion interna
 	hlist_for_each_entry_rcu(gw_node, &bat_priv->gw.gateway_list, list) {
 		/* fails if orig_node has no router */
+		//Si se prudice algun error, salteo el nodo y continuo con el siguiente
 		if (batadv_v_gw_write_buffer_text(bat_priv, seq, gw_node) < 0)
 			continue;
 
 		gw_count++;
 	}
 	rcu_read_unlock();
-
+	//libero los recursos
+	//Si la conteo es cero, no posee nodos GW a mi alrededor
 	if (gw_count == 0)
 		seq_puts(seq, "No gateways in range ...\n");
 }
