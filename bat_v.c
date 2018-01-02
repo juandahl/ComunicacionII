@@ -1524,12 +1524,20 @@ static struct batadv_algo_ops batadv_batman_v __read_mostly = {
  *  hard-interface object
  * @hard_iface: the hard-interface to initialize
  */
+//La funcion "batadv_v_hardif_init" inicializa el algoritmo para un interfaz fisica dada.
+//Setea lo campos de tiempo entre emision de mensajes ELP ("elp_interval"), y el rendimiento del mismo en 0 (cero).
+//
+//Es invocada en hard-interface.c -->batadv_hardif_add_interface
+//
+//No posee valor de retorno.
 void batadv_v_hardif_init(struct batadv_hard_iface *hard_iface)
 {
 	/* enable link throughput auto-detection by setting the throughput
 	 * override to zero
 	 */
+	//Habilitar la autodeteccion de rendimiento mediante la sobreescritura del throughput en 0 (cero).
 	atomic_set(&hard_iface->bat_v.throughput_override, 0);
+	//Se seteo el intervalo de emision de mensajes ELP en 500  milisegs
 	atomic_set(&hard_iface->bat_v.elp_interval, 500);
 }
 
@@ -1540,10 +1548,20 @@ void batadv_v_hardif_init(struct batadv_hard_iface *hard_iface)
  *
  * Return: 0 on success or a negative error code otherwise
  */
+//La funcion "batadv_v_mesh_init" inicializa los campos privados de B.A.T.M.A.N. V de la mesh. "batadv_v_mesh_init" recibe por
+//parametro una mesh interface con toda su informacion, donde se inicializan todos los recursos privados para una mesh.
+//Por ello se llama a la funcion "batadv_v_ogm_init" del archivo bat_v_ogm.c que se encarga de inicializar
+//el buffer OGM y la workqueue preparando un paquete OGM inicial. Esta retorna 0 si no hay problemas, o el numero 
+//de error si falla al asignar memoria.
+//
+//Es invocada en: 
+//		-main.c -->batadv_mesh_init -->batadv_v_mesh_init
+// 
+//Retorna 0(cero) en caso de exito en la operacion, o el codigo de error correspondiente.
 int batadv_v_mesh_init(struct batadv_priv *bat_priv)
 {
 	int ret = 0;
-
+	// Invoca a "batadv_v_ogm_init"
 	ret = batadv_v_ogm_init(bat_priv);
 	if (ret < 0)
 		return ret;
@@ -1555,8 +1573,19 @@ int batadv_v_mesh_init(struct batadv_priv *bat_priv)
  * batadv_v_mesh_free - free the B.A.T.M.A.N. V private resources for a mesh
  * @bat_priv: the object representing the mesh interface to free
  */
+//La funcion "batadv_v_mesh_free" libera los recursos privados B.A.T.M.A.N. V de la mesh. Para ello invoca a
+//a funcion "batadv_v_ogm_free". En cada interfaz batman de un nodo, se almacena informacion de varios tipos.
+//Entre esa informacion se almacena el buffer de los paquetes ogm junto con la cola de trabajo de los paquetes OGM.
+//Esta funcion (batadv_v_ogm_free) recibe una interfaz, y se encarga de liberar la memoria del buffer OGM
+//y setear los valores iniciales
+//
+//Es invocada en:
+//		-main.c --> batadv_mesh_free -->batadv_v_mesh_free
+//
+//No posee valor de retorno.
 void batadv_v_mesh_free(struct batadv_priv *bat_priv)
 {
+	//invocacion
 	batadv_v_ogm_free(bat_priv);
 }
 
@@ -1568,22 +1597,35 @@ void batadv_v_mesh_free(struct batadv_priv *bat_priv)
  *
  * Return: 0 on success or a negative error code otherwise
  */
+
+//batadv_v_init - B.A.T.M.A.N. Función de inicialización de V
+//
+//La funcion "batadv_v_init" se encarga de inicializar todos los subcomponentes.
+//Se invoca solo al cargar el módulo, en main.c --> batadv_init --> batadv_v_init.
+//
+//Retorna 0 en caso de éxito o un código de error negativo de lo contrario
+
 int __init batadv_v_init(void)
 {
 	int ret;
 
-	/* B.A.T.M.A.N. V echo location protocol packet  */
+	/* B.A.T.M.A.N. V echo location protocol packet */
+	//Inicializa el modulo gestionador/controlador de mensajes ELP.
 	ret = batadv_recv_handler_register(BATADV_ELP,
 					   batadv_v_elp_packet_recv);
+	//En caso de error retorna el codigo de error.
 	if (ret < 0)
 		return ret;
 
+	//Inicializa el modulo administrador de mensajes OGM.
 	ret = batadv_recv_handler_register(BATADV_OGM2,
 					   batadv_v_ogm_packet_recv);
+	//En caso de error, quito el registro del metodo administrador de ELP
 	if (ret < 0)
 		goto elp_unregister;
-
+	
 	ret = batadv_algo_register(&batadv_batman_v);
+	//En caso de error, quito el registro de la inicializacion OGM
 	if (ret < 0)
 		goto ogm_unregister;
 
@@ -1594,7 +1636,7 @@ ogm_unregister:
 
 elp_unregister:
 	batadv_recv_handler_unregister(BATADV_ELP);
-
+	//Retorno 0 en caso de realizar todas las opraciones satisfactoriamente.
 	return ret;
 }
 
